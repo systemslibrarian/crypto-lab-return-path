@@ -6,6 +6,7 @@ import { BLOCK_SIZE, encryptCodebook, generateKey } from './spn.ts';
 import {
   backwardSet,
   bestDifferential,
+  bestTrail,
   bestSplit,
   forwardSet,
   missInTheMiddle,
@@ -167,15 +168,59 @@ describe('Act 1: trail probability versus differential probability', () => {
   ];
 
   it.each(expected)(
-    'R=%i: best trail %s, differential %s',
+    'R=%i: the best TRAIL runs %i -> %i at %s, and that pair\u2019s differential is %s',
     (rounds, alpha, delta, trailLabel, diffLabel) => {
-      const best = bestDifferential(wTables[rounds - 1]);
+      const best = bestTrail(wTables[rounds - 1]);
       expect(best.alpha).toBe(alpha);
       expect(best.delta).toBe(delta);
       expect(`2^${Math.log2(best.trailProbability).toFixed(2)}`).toBe(trailLabel);
       expect(`2^${Math.log2(best.differentialProbability).toFixed(2)}`).toBe(diffLabel);
     }
   );
+
+  it('bestTrail really maximises the trail, checked against an exhaustive sweep', () => {
+    // INDEPENDENT RE-DERIVATION of the maximum, over all 65 025 nonzero endpoint
+    // pairs, written as a flat sweep rather than by calling the helper twice.
+    for (let r = 1; r <= 6; r++) {
+      let top = 0;
+      for (let a = 1; a < BLOCK_SIZE; a++) {
+        for (let d = 1; d < BLOCK_SIZE; d++) top = Math.max(top, wTables[r - 1].trail[a][d]);
+      }
+      expect(bestTrail(wTables[r - 1]).trailProbability).toBe(top);
+    }
+  });
+
+  it('bestDifferential really maximises the DIFFERENTIAL, checked the same way', () => {
+    for (let r = 1; r <= 6; r++) {
+      let top = 0;
+      for (let a = 1; a < BLOCK_SIZE; a++) {
+        for (let d = 1; d < BLOCK_SIZE; d++) top = Math.max(top, wTables[r - 1].differential[a][d]);
+      }
+      expect(bestDifferential(wTables[r - 1]).differentialProbability).toBe(top);
+    }
+  });
+
+  it('the two disagree from four rounds on: the best trail does not point at the best differential', () => {
+    // The reason the two functions have different names. Pinned as exact
+    // endpoints, because "they sometimes differ" is not a result.
+    const rows = [1, 2, 3, 4, 5, 6].map((r) => {
+      const t = bestTrail(wTables[r - 1]);
+      const d = bestDifferential(wTables[r - 1]);
+      return { r, same: t.alpha === d.alpha && t.delta === d.delta, d };
+    });
+    expect(rows.map((x) => x.same)).toEqual([true, true, true, false, false, false]);
+    expect([rows[3].d.alpha, rows[3].d.delta]).toEqual([0xb0, 0x90]);
+    expect([rows[4].d.alpha, rows[4].d.delta]).toEqual([0x04, 0x0d]);
+    expect([rows[5].d.alpha, rows[5].d.delta]).toEqual([0x0a, 0x0d]);
+  });
+
+  it('the best differential is never less probable than the best trail\u2019s differential', () => {
+    for (let r = 1; r <= 6; r++) {
+      expect(bestDifferential(wTables[r - 1]).differentialProbability).toBeGreaterThanOrEqual(
+        bestTrail(wTables[r - 1]).differentialProbability
+      );
+    }
+  });
 
   it('the differential is never less probable than its best single trail', () => {
     for (let r = 1; r <= 6; r++) {
@@ -190,10 +235,8 @@ describe('Act 1: trail probability versus differential probability', () => {
   });
 
   it('the gap between trail and differential opens as rounds grow', () => {
-    // The Act 1 result: a single trail stops being the differential. Stated as a
-    // monotone comparison of the ratio, not a hand-picked pair.
     const ratios = [1, 2, 3, 4, 5, 6].map((r) => {
-      const b = bestDifferential(wTables[r - 1]);
+      const b = bestTrail(wTables[r - 1]);
       return b.differentialProbability / b.trailProbability;
     });
     expect(ratios[0]).toBeCloseTo(1, 12);
@@ -211,19 +254,19 @@ describe('Act 1: trail probability versus differential probability', () => {
     }
   });
 
-  it('the best differential falls below one right pair in the full codebook at five rounds', () => {
+  it('the best trail falls below one right pair in the full codebook at five rounds', () => {
     const pairs = BLOCK_SIZE / 2;
     const counts = [1, 2, 3, 4, 5, 6].map(
-      (r) => pairs * bestDifferential(wTables[r - 1]).differentialProbability
+      (r) => pairs * bestTrail(wTables[r - 1]).differentialProbability
     );
     expect(counts[3]).toBeGreaterThan(1);
     expect(counts[4]).toBeLessThan(1);
   });
 
-  it('the PRESENT S-box decays faster than the textbook one at every round count', () => {
+  it('the PRESENT S-box has a weaker best trail than the textbook one at every round count', () => {
     for (let r = 1; r <= 6; r++) {
-      expect(bestDifferential(sTables[r - 1]).trailProbability).toBeLessThanOrEqual(
-        bestDifferential(wTables[r - 1]).trailProbability
+      expect(bestTrail(sTables[r - 1]).trailProbability).toBeLessThanOrEqual(
+        bestTrail(wTables[r - 1]).trailProbability
       );
     }
   });
@@ -232,7 +275,7 @@ describe('Act 1: trail probability versus differential probability', () => {
 describe('reconstructTrail', () => {
   it('rebuilds a trail whose probability equals the table entry', () => {
     for (let r = 1; r <= 6; r++) {
-      const best = bestDifferential(wTables[r - 1]);
+      const best = bestTrail(wTables[r - 1]);
       const trail = reconstructTrail(W.ddt, wTables, r, best.alpha, best.delta);
       expect(trail.steps).toHaveLength(r);
       expect(trail.probability).toBeCloseTo(best.trailProbability, 15);
@@ -240,7 +283,7 @@ describe('reconstructTrail', () => {
   });
 
   it('chains its own steps: each step starts where the last one landed, permuted', () => {
-    const best = bestDifferential(wTables[3]);
+    const best = bestTrail(wTables[3]);
     const trail = reconstructTrail(W.ddt, wTables, 4, best.alpha, best.delta);
     expect(trail.steps[0].inDiff).toBe(best.alpha);
     for (let i = 1; i < trail.steps.length; i++) {

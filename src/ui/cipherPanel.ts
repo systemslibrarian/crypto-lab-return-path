@@ -12,7 +12,7 @@ import {
   generateKey,
   type SpnKey,
 } from '../crypto/spn.ts';
-import { getSbox, type Sbox } from '../crypto/sbox.ts';
+import { getSbox, type Sbox, type SboxName } from '../crypto/sbox.ts';
 import { disclosure, el, hex16, hex4, hex8, scrollRegion } from './dom.ts';
 
 function sboxTable(sbox: Sbox): HTMLElement {
@@ -78,8 +78,22 @@ function scheduleTable(key: SpnKey): HTMLElement {
   ]);
 }
 
-export function cipherPanel(): HTMLElement {
-  const sbox = getSbox('weak');
+export interface CipherPanel {
+  readonly node: HTMLElement;
+  render(sboxName: SboxName): void;
+}
+
+/**
+ * Act 0 re-renders when the global control changes.
+ *
+ * It did not, at first, and the claims suite caught it: after switching to the
+ * PRESENT table the page went on printing the textbook S-box here while every
+ * measurement below used the other one. One part of a page describing a
+ * different cipher from the rest is the exact failure this lab exists to warn
+ * about, so it is now a rendered function of the control like everything else.
+ */
+export function cipherPanel(): CipherPanel {
+  const tables = el('div', { id: 'act0-tables' });
   const key = generateKey(0xabcd);
   const section = el('section', { class: 'card', 'aria-labelledby': 'act0-title', id: 'act0' }, [
     el('div', { class: 'act-head' }, [
@@ -87,14 +101,12 @@ export function cipherPanel(): HTMLElement {
       el('h2', { class: 'act-title', id: 'act0-title', text: 'The cipher you already broke' }),
     ]),
     el('p', { class: 'act-lede' }, [
-      document.createTextNode(
-        'This is the same toy cipher two other labs attack, reused rather than reinvented so the three attacks land on one target. An '
-      ),
+      document.createTextNode('The same toy cipher two other labs attack, so three attacks land on one target. An '),
       el('strong', { text: `${BLOCK_BITS}-bit block` }),
       document.createTextNode(', a 16-bit key, and '),
       el('strong', { text: `${FULL_ROUNDS} rounds` }),
       document.createTextNode(
-        ' of: mix in the round key, push both halves of the byte through a 4-bit substitution table, then shuffle the bits. The last round skips the shuffle, because a public shuffle after the last substitution buys nothing.'
+        ' of: mix in the round key, push both halves of the byte through a 4-bit substitution table, then shuffle the bits. The last round skips the shuffle.'
       ),
     ]),
   ]);
@@ -119,16 +131,14 @@ export function cipherPanel(): HTMLElement {
       document.createTextNode(' (differential cryptanalysis, and where this cipher is defined) and '),
       el('a', { href: 'https://systemslibrarian.github.io/crypto-lab-matsui-line/', target: '_blank', rel: 'noopener', text: 'Matsui Line' }),
       document.createTextNode(
-        ' (linear cryptanalysis). The known-answer tests from Biham Lens pass here unchanged; if they ever stop, the build fails.'
+        ' (linear cryptanalysis). Its known-answer tests pass here unchanged; if they ever stop, the build fails.'
       ),
     ])
   );
 
   section.append(
-    disclosure('The exact tables: S-box, bit permutation, key schedule', [
-      sboxTable(sbox),
-      permTable(),
-      scheduleTable(key),
+    disclosure('Inspect the evidence: S-box, bit permutation, key schedule', [
+      tables,
       el('p', {}, [
         document.createTextNode(
           'A detail worth carrying into Act 3: the key schedule repeats every four rounds, so the final mixing key of the four-round cipher is the first round key again -- the low byte of the master key. Recovering it recovers half the key.'
@@ -137,5 +147,10 @@ export function cipherPanel(): HTMLElement {
     ])
   );
 
-  return section;
+  function render(sboxName: SboxName): void {
+    tables.replaceChildren(sboxTable(getSbox(sboxName)), permTable(), scheduleTable(key));
+  }
+  render('weak');
+
+  return { node: section, render };
 }

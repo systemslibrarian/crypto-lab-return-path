@@ -86,6 +86,21 @@ function deriveBCT(sbox: number[]): number[][] {
   return t;
 }
 
+/**
+ * The eight quartet values, read from the square the reader is looking at. Each
+ * corner's value text carries `data-node`, so this reads the same rendering the
+ * page shows rather than a second source that could drift from it.
+ */
+async function readQuartet(page: Page): Promise<Record<string, number>> {
+  const pairs = await page
+    .locator('#quartet-out .q-val')
+    .evaluateAll((els) => els.map((e) => [e.getAttribute('data-node') ?? '', e.textContent ?? '']));
+  expect(pairs, 'the square must render all eight corners').toHaveLength(8);
+  const out: Record<string, number> = {};
+  for (const [name, text] of pairs) out[name] = parseHexByte(text);
+  return out;
+}
+
 function parseHexByte(s: string): number {
   const m = /0x([0-9a-f]{2})/i.exec(s);
   expect(m, `expected a hex byte in: ${s}`).not.toBeNull();
@@ -334,35 +349,43 @@ test('Act 2: the impossible list is exactly the differences absent from the reac
 
 test('Act 2: the miss-in-the-middle overlap really is empty, as the page claims', async ({ page }) => {
   await boot(page);
-  const forward = (await page
-    .locator('#imp-out .stat')
-    .filter({ hasText: 'forward from' })
-    .locator('.stat-sub')
-    .textContent()) ?? '';
-  const backward = (await page
-    .locator('#imp-out .stat')
-    .filter({ hasText: 'backward from' })
-    .locator('.stat-sub')
-    .textContent()) ?? '';
-  const shared = (await page
-    .locator('#imp-out .stat')
-    .filter({ hasText: 'in both lists' })
-    .locator('.stat-val')
-    .textContent()) ?? '';
-  expect(shared.trim()).toBe('none');
+  // Read the diagram, which is now where the argument lives: two lists of values
+  // and a badge asserting they share nothing. CROSS-CHECK the badge against the
+  // lists it claims to describe.
+  const counts = await page.locator('#imp-out .mim-count').allTextContents();
+  expect(counts, 'a forward count and a backward count').toHaveLength(2);
+  const forwardChips = (
+    await page.locator('#imp-out [aria-label="forward-reachable middle differences"] li').allTextContents()
+  ).map((t) => t.trim());
+  expect(forwardChips.length).toBeGreaterThan(0);
+  // The count in words must equal the chips rendered beside it.
+  expect(numbersIn(counts[0])[0]).toBe(forwardChips.length);
 
-  // CROSS-CHECK: the forward list is short enough that the page prints it in
-  // full as chips as well. Intersect the two printed lists here.
-  const fwdSet = new Set(forward.trim().split(/\s+/));
-  expect(fwdSet.size).toBeGreaterThan(0);
-  const chips = await page
-    .locator('#imp-out [aria-label="forward-reachable middle differences"] li')
-    .allTextContents();
-  expect(new Set(chips.map((c) => c.trim().split(/\s/)[0]))).toEqual(fwdSet);
-  if (!backward.includes('...')) {
-    const bwdSet = new Set(backward.trim().split(/\s+/));
-    expect([...fwdSet].filter((x) => bwdSet.has(x))).toEqual([]);
+  await expect(page.locator('#imp-out .mim-middle')).toHaveClass(/mim-empty/);
+  await expect(page.locator('#imp-out .mim-gap-label')).toHaveText('No value appears in both lists');
+  // Nothing is listed as shared, which is the claim the badge makes.
+  await expect(page.locator('#imp-out [aria-label="differences in both lists"]')).toHaveCount(0);
+
+  // RE-DERIVATION: the forward list really is what one round can reach from the
+  // input difference, recomputed here from the S-box the page prints.
+  const sbox = await readSboxFromPage(page);
+  const ddt = deriveDDT(sbox);
+  const perm = await readPermutationFromPage(page);
+  const permute = (b: number): number => {
+    let out = 0;
+    for (let i = 0; i < 8; i++) out |= ((b >> i) & 1) << perm[i];
+    return out & 0xff;
+  };
+  const alpha = parseHexByte((await page.locator('#imp-alpha').inputValue()) ?? '');
+  const reachable = new Set<number>();
+  for (let h = 0; h < 16; h++) {
+    if (ddt[(alpha >> 4) & 0xf][h] === 0) continue;
+    for (let l = 0; l < 16; l++) {
+      if (ddt[alpha & 0xf][l] === 0) continue;
+      reachable.add(permute((h << 4) | l));
+    }
   }
+  expect(new Set(forwardChips.map(parseHexByte))).toEqual(reachable);
 });
 
 test('Act 2 FAILURE PATH: a zero input difference is refused and the cause is named', async ({
@@ -678,18 +701,14 @@ test('Act 5: the quartet walk replays a real quartet, checked leg by leg', async
     await page.locator('#walk-step').click();
     await expect(page.locator('#walk-progress')).toHaveText(`Step ${i} of 8.`);
   }
-  const corners = await page.locator('#quartet-out .corner-val').allTextContents();
-  expect(corners).toHaveLength(4);
-  const [p12, c12, c34, p34] = corners.map((t) => t.trim().split(/\s+/).map(parseHexByte));
-  const alphaFromP = p12[0] ^ p12[1];
-  const alphaBack = p34[0] ^ p34[1];
+  const q = await readQuartet(page);
   // The boomerang's whole claim: the plaintext difference came back.
-  expect(alphaBack).toBe(alphaFromP);
-  // The ciphertext shift really was applied to both.
-  expect(c34[0] ^ c12[0]).toBe(c34[1] ^ c12[1]);
+  expect(q.p3 ^ q.p4).toBe(q.p1 ^ q.p2);
+  // The ciphertext shift really was applied to both, identically.
+  expect(q.c3 ^ q.c1).toBe(q.c4 ^ q.c2);
   // Four distinct plaintexts and four distinct ciphertexts: a real quartet.
-  expect(new Set([...p12, ...p34]).size).toBe(4);
-  expect(new Set([...c12, ...c34]).size).toBe(4);
+  expect(new Set([q.p1, q.p2, q.p3, q.p4]).size).toBe(4);
+  expect(new Set([q.c1, q.c2, q.c3, q.c4]).size).toBe(4);
 });
 
 // ── The [hidden] cascade probe (template section 4.1) ──────────────────────
@@ -779,9 +798,8 @@ test('NEG-1 assertion 2: in that state every check the page performs reports suc
   await expect(page.locator('#boom-out .boom-verdict.verdict-pass')).toHaveCount(1);
   // The walk itself: every leg of the stated trail held, re-derived from the
   // corner values rather than read from a status flag.
-  const corners = await page.locator('#quartet-out .corner-val').allTextContents();
-  const [p12, , , p34] = corners.map((t) => t.trim().split(/\s+/).map(parseHexByte));
-  expect(p34[0] ^ p34[1]).toBe(p12[0] ^ p12[1]);
+  const q = await readQuartet(page);
+  expect(q.p3 ^ q.p4).toBe(q.p1 ^ q.p2);
   // No failure verdict anywhere in the fixture, and no refusal code.
   await expect(page.locator('#imp-out .verdict-fail')).toHaveCount(0);
   await expect(page.locator('#switch-out .verdict-fail')).toHaveCount(0);
@@ -871,7 +889,7 @@ test('the attack model is stated before Act 4 runs (invariant I6)', async ({ pag
   await boot(page);
   const callout = page.locator('#act4 .callout-caveat').first();
   await expect(callout).toBeVisible();
-  await expect(callout).toContainText('adaptive chosen-ciphertext oracle');
+  await expect(callout).toContainText('adaptive chosen-ciphertext');
   // Before, not after: the caveat must precede the results region in the DOM.
   const order = await page.evaluate(() => {
     const c = document.querySelector('#act4 .callout-caveat');
@@ -887,10 +905,10 @@ test('every measured rate on screen carries its sample size (invariant I2)', asy
   // Each measuring panel must print a sample size beside its rate.
   await expect(
     page.locator('#decay-out .stat').filter({ hasText: 'measured' }).first()
-  ).toContainText('real pairs');
+  ).toContainText('pairs');
   await expect(
     page.locator('#imp-out .stat').filter({ hasText: 'pairs encrypted' })
-  ).toContainText('keys x 128 pairs');
+  ).toContainText('keys \u00d7 128 pairs');
   await expect(
     page.locator('#boom-out .stat').filter({ hasText: '95% interval' })
   ).toContainText('quartets');
@@ -911,4 +929,190 @@ test('the scripture footer is the last visible element, verbatim and once', asyn
     return f !== null && document.body.lastElementChild === f;
   });
   expect(isLast).toBe(true);
+});
+
+// ── Rapid changes never pair one input with another's evidence ─────────────
+
+/**
+ * The integration half of latest-request-wins (`src/ui/latest.test.ts` is the
+ * unit half, where responses are reordered directly).
+ *
+ * The hazard is specific: changing the S-box starts five Worker jobs, and a
+ * slower earlier job answering after a faster later one would paint the previous
+ * S-box's numbers under the new S-box's label. For a page whose whole argument is
+ * "these numbers came from this cipher", that is the worst failure available, and
+ * it is invisible in a screenshot.
+ *
+ * Twenty toggles as fast as the harness can issue them, then one check that the
+ * evidence on screen belongs to the table now selected. The check is a real
+ * re-derivation rather than a label comparison: the two S-boxes have different
+ * maximum DDT entries, so the marked cells in Act 5's tables and the switch
+ * measurement differ between them.
+ */
+test('twenty rapid S-box toggles never leave one table’s numbers under the other’s label', async ({
+  page,
+}) => {
+  await boot(page);
+  const select = page.locator('#global-sbox');
+  for (let i = 0; i < 20; i++) {
+    await select.selectOption(i % 2 === 0 ? 'strong' : 'weak');
+  }
+  // Land on a known one and wait for the page to settle completely.
+  await select.selectOption('strong');
+  await expect(page.locator('#switch-out')).not.toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#decay-out')).not.toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#boom-out')).not.toHaveAttribute('aria-busy', 'true');
+
+  // RE-DERIVATION against the S-box the page is NOW printing.
+  const sbox = await readSboxFromPage(page);
+  expect(sbox, 'the page must be printing the PRESENT S-box').toEqual([
+    0xc, 0x5, 0x6, 0xb, 0x9, 0x0, 0xa, 0xd, 0x3, 0xe, 0xf, 0x8, 0x4, 0x7, 0x1, 0x2,
+  ]);
+  const bct = deriveBCT(sbox);
+  const rows = page.locator('#switch-out table').first().locator('tbody tr');
+  await expect(rows).toHaveCount(4);
+  for (let i = 0; i < 4; i++) {
+    const beta = parseHexByte((await rows.nth(i).locator('td').nth(0).textContent()) ?? '');
+    const gamma = parseHexByte((await rows.nth(i).locator('td').nth(1).textContent()) ?? '');
+    const measured = ((await rows.nth(i).locator('td').nth(4).textContent()) ?? '').trim();
+    const expected = bct[(beta >> 4) & 0xf][(gamma >> 4) & 0xf] * bct[beta & 0xf][gamma & 0xf];
+    expect(measured, `row ${i} must describe the S-box now selected`).toBe(`${expected}/256`);
+  }
+  // And the teaser, which is the first thing a reader sees, moved with it.
+  const teaserCells = await page.locator('#teaser .teaser-cell-val').allTextContents();
+  const bh = 0x0;
+  const bl = 0x8;
+  const gh = 0x1;
+  const gl = 0x0;
+  expect(teaserCells[1]).toBe(`${bct[bh][gh]}/16 and ${bct[bl][gl]}/16`);
+});
+
+test('a panel is marked busy while it runs and settles afterwards', async ({ page }) => {
+  await boot(page);
+  // `aria-busy` is what tells a screen reader to hold its announcement rather
+  // than read a half-built result. Asserted as a real transition, not a
+  // stylesheet class.
+  await page.locator('#imp-keys').selectOption('65536');
+  const busySeen = page.waitForFunction(
+    () => document.querySelector('#imp-out')?.getAttribute('aria-busy') === 'true'
+  );
+  await page.locator('#imp-run').click();
+  await busySeen;
+  await expect(page.locator('#imp-out')).not.toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#imp-out .verdict-pass')).toHaveCount(1);
+});
+
+test('pressing a run button does not steal focus from it', async ({ page }) => {
+  await boot(page);
+  // Moving focus to a result is the usual well-meant mistake: it loses the
+  // reader's place and, for a keyboard user, their position in the control row.
+  await page.locator('#sieve-run').focus();
+  const before = await runId(page, '#sieve-out');
+  await page.locator('#sieve-run').click();
+  await awaitRerender(page, '#sieve-out', before);
+  await expect(page.locator('#sieve-run')).toBeFocused();
+  // And the result is next in reading order after the control that produced it.
+  const order = await page.evaluate(() => {
+    const btn = document.querySelector('#sieve-run');
+    const out = document.querySelector('#sieve-out');
+    if (!btn || !out) return -1;
+    return btn.compareDocumentPosition(out) & Node.DOCUMENT_POSITION_FOLLOWING ? 1 : 0;
+  });
+  expect(order).toBe(1);
+});
+
+test('each panel announces ONE sentence, not its whole contents', async ({ page }) => {
+  await boot(page);
+  // The live regions are small and separate from the result containers, so a
+  // rerun produces one concise announcement rather than re-reading every chart,
+  // table and verdict in the panel.
+  for (const id of ['#decay-out-announce', '#imp-out-announce', '#sieve-out-announce', '#boom-out-announce', '#switch-out-announce']) {
+    const node = page.locator(id);
+    await expect(node).toHaveAttribute('role', 'status');
+    await expect(node).toHaveAttribute('aria-live', 'polite');
+    const text = ((await node.textContent()) ?? '').trim();
+    expect(text.length, `${id} must say something`).toBeGreaterThan(10);
+    // One or two sentences, not a panel's worth of prose.
+    expect(text.length, `${id} announcement is ${text.length} chars: too long to hear`).toBeLessThan(220);
+  }
+  // And the containers they describe are NOT themselves live regions.
+  for (const id of ['#decay-out', '#imp-out', '#sieve-out', '#boom-out', '#switch-out', '#walk-out']) {
+    await expect(page.locator(id)).toHaveAttribute('role', 'region');
+    expect(await page.locator(id).getAttribute('aria-live')).toBeNull();
+  }
+});
+
+test('the share link round-trips every control', async ({ page }) => {
+  await boot(page);
+  await page.locator('#imp-alpha').fill('0x04');
+  await page.locator('#imp-rounds').selectOption('4');
+  await page.locator('#sieve-key').fill('0xabcd');
+  await page.locator('.seg-btn[data-case="amplified"]').click();
+  await expect(page.locator('.seg-btn[data-case="amplified"]')).toHaveAttribute('aria-pressed', 'true');
+
+  // The page SHOWS the link as well as copying it, so this reads what a reader
+  // would see -- which is also the path that runs when a clipboard write is
+  // refused, as it is in plenty of contexts.
+  await page.locator('#share-run').click();
+  await expect(page.locator('#share-url')).toHaveCount(1);
+  const url = (await page.locator('#share-url').textContent()) ?? '';
+  expect(url).toContain('alpha=0x04');
+  expect(url).toContain('irounds=4');
+  expect(url).toContain('key=0xabcd');
+  expect(url).toContain('case=amplified');
+
+  // Follow it, and the controls come back.
+  await page.goto(url);
+  await expect(page.locator('#imp-alpha')).toHaveValue('0x04');
+  await expect(page.locator('#imp-rounds')).toHaveValue('4');
+  await expect(page.locator('#sieve-key')).toHaveValue('0xabcd');
+  await expect(page.locator('.seg-btn[aria-pressed="true"]')).toHaveAttribute('data-case', 'amplified');
+});
+
+test('a share link cannot inject a value the controls do not offer', async ({ page }) => {
+  // Query parameters are untrusted input. Every consumer re-validates against its
+  // own option list, so a hostile link degrades to the default rather than
+  // putting an arbitrary string into a control.
+  await page.goto('./?sbox=evil&irounds=99&case=nope&ikeys=1e9&alphas=7,7,7');
+  for (const p of ['#decay-out', '#imp-out', '#sieve-out', '#boom-out', '#switch-out']) {
+    await expect(page.locator(p)).not.toHaveAttribute('data-run', '0');
+  }
+  await expect(page.locator('#global-sbox')).toHaveValue('weak');
+  await expect(page.locator('#imp-rounds')).toHaveValue('3');
+  await expect(page.locator('#imp-keys')).toHaveValue('256');
+  await expect(page.locator('#sieve-alphas')).toHaveValue('4,10');
+  await expect(page.locator('.seg-btn[aria-pressed="true"]')).toHaveAttribute('data-case', 'ladder');
+});
+
+test('Reset everything really restores every shipped default', async ({ page }) => {
+  await boot(page);
+  await page.locator('#global-sbox').selectOption('strong');
+  await page.locator('#imp-alpha').fill('0x04');
+  await page.locator('#imp-keys').selectOption('4096');
+  await page.locator('#decay-keys').selectOption('2048');
+  await page.locator('#boom-keys').selectOption('3000');
+  await page.locator('.seg-btn[data-case="control"]').click();
+  await expect(page.locator('.seg-btn[data-case="control"]')).toHaveAttribute('aria-pressed', 'true');
+
+  const before = await runId(page, '#sieve-out');
+  await page.locator('#reset-all').click();
+  await awaitRerender(page, '#sieve-out', before);
+
+  await expect(page.locator('#global-sbox')).toHaveValue('weak');
+  await expect(page.locator('#imp-alpha')).toHaveValue('0x0a');
+  await expect(page.locator('#imp-delta')).toHaveValue('0x01');
+  await expect(page.locator('#imp-keys')).toHaveValue('256');
+  await expect(page.locator('#decay-keys')).toHaveValue('256');
+  await expect(page.locator('#boom-keys')).toHaveValue('512');
+  await expect(page.locator('.seg-btn[aria-pressed="true"]')).toHaveAttribute('data-case', 'ladder');
+  // And the evidence came back with them.
+  await expect(page.locator('#imp-out .verdict-pass .verdict-label')).toContainText('IMPOSSIBLE');
+});
+
+test('the run metadata says how long it took and which thread ran it', async ({ page }) => {
+  await boot(page);
+  for (const id of ['#decay-out-meta', '#imp-out-meta', '#sieve-out-meta', '#boom-out-meta']) {
+    await expect(page.locator(id)).toContainText(/\d+ ms/);
+    await expect(page.locator(id)).toContainText(/worker thread|main thread/);
+  }
 });

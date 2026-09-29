@@ -7,7 +7,7 @@
  * omission is stated -- an unverified 2^78 quoted confidently is worse than no
  * number at all.
  */
-import { callout, disclosure, el } from './dom.ts';
+import { disclosure, el } from './dom.ts';
 
 export function contextPanel(): HTMLElement {
   const section = el('section', { class: 'card', 'aria-labelledby': 'act6-title', id: 'act6' }, [
@@ -17,13 +17,22 @@ export function contextPanel(): HTMLElement {
     ]),
     el('p', { class: 'act-lede' }, [
       document.createTextNode(
-        'Both techniques on this page were built to beat ciphers where no single differential survives enough rounds, and both did. They are why a modern block cipher is analysed for impossible differentials and boomerangs as a matter of course, not only for classical differential probability.'
+        'Both techniques were built to beat ciphers where no single differential survives enough rounds, and both did \u2014 which is why a modern block cipher is analysed for impossible differentials and boomerangs as a matter of course.'
       ),
     ]),
   ]);
 
   section.append(
-    el('ul', { class: 'refs', role: 'list' }, [
+    el('p', {}, [
+      document.createTextNode(
+        'Skipjack lost 31 of its 32 rounds to an impossible differential. COCONUT98, designed to be provably secure against conventional differential cryptanalysis, fell to the boomerang anyway. The switching techniques behind Act 5\u2019s first case reach the full AES-192 and AES-256 \u2014 in the related-key model, which is far stronger than the single-key one here and does not threaten AES as deployed.'
+      ),
+    ])
+  );
+
+  section.append(
+    disclosure('Inspect the evidence: each result, and what is deliberately not quoted', [
+      el('ul', { class: 'refs', role: 'list' }, [
       el('li', { role: 'listitem' }, [
         el('strong', { text: 'Skipjack, 31 of its 32 rounds. ' }),
         document.createTextNode(
@@ -54,14 +63,10 @@ export function contextPanel(): HTMLElement {
           'Murphy showed in 2011 that two independently chosen trails can be incompatible, so p2q2 can be badly wrong. Cid, Huang, Peyrin, Sasaki and Song answered it in 2018 with the Boomerang Connectivity Table, which is the exact accounting for a one-layer switch -- the thing Act 5 measures.'
         ),
       ]),
-    ])
-  );
-
-  section.append(
-    callout('note', 'On the numbers not quoted here', [
+    ]),
       el('p', {}, [
         document.createTextNode(
-          'Round counts above are stated because they were checked. Data and time complexities are deliberately not quoted: they were not verified against the primary papers while this page was written, and a confident 2-to-the-something is the easiest thing in cryptanalysis to get subtly wrong. Follow the references for them.'
+          'Round counts above are stated because they were checked. Data and time complexities are deliberately NOT quoted anywhere in this lab: they were not verified against the primary papers while this page was written, and a confidently wrong exponent is the easiest thing in cryptanalysis to produce. Follow the references for them.'
         ),
       ]),
     ])
@@ -87,81 +92,85 @@ export function contextPanel(): HTMLElement {
 }
 
 export function honestyPanel(): HTMLElement {
-  return el('section', { class: 'card card-honest', 'aria-labelledby': 'honest-title', id: 'honesty' }, [
-    el('h2', { class: 'act-title', id: 'honest-title', text: 'What is real here, and what this does not prove' }),
-    el('p', {}, [
+  /**
+   * Four lines always visible, then the rest individually collapsible.
+   *
+   * Two of the four are load-bearing and must never move behind a disclosure:
+   * "not production cryptography", and the NEGATIVE CLAIM this lab exists to
+   * demonstrate. A limitation a reader has to open a panel to find is a
+   * limitation the page is hiding, and the claims suite asserts both are outside
+   * every `<details>` on the page.
+   */
+  const summary = el('ul', { class: 'honest-list honest-summary', role: 'list' }, [
+    el('li', { role: 'listitem' }, [
       el('strong', { text: 'Not production cryptography. ' }),
       document.createTextNode(
-        'An 8-bit block with a 16-bit key is a teaching target built to be broken in front of you. Nothing on this page is a statement about a cipher anyone uses.'
+        'An 8-bit block with a 16-bit key is a teaching target built to be broken in front of you.'
       ),
     ]),
-    el('ul', { class: 'honest-list', role: 'list' }, [
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'Everything measured is measured. ' }),
-        document.createTextNode(
-          'Every probability labelled "measured" comes from real encryptions and decryptions performed in this tab, with its sample size printed beside it. Nothing is simulated, approximated, or replayed from a recording. The two tables are computed from the S-box on the page, and the test suite recomputes both by brute force along a different route.'
-        ),
-      ]),
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'The exhaustive checks are a luxury of a tiny block. ' }),
-        document.createTextNode(
-          '256 plaintexts and 65 536 keys means an impossibility claim here can be checked by trying everything. For a real cipher that is out of reach, and impossibility is argued structurally -- which is what the structural argument on this page is for, and what the enumeration would catch being wrong.'
-        ),
-      ]),
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'The impossible differential covers three rounds, not four. ' }),
-        document.createTextNode(
-          'On the full four-round cipher every output difference is reachable from every input difference: there is no four-round impossible differential. The attack in Act 3 uses the three-round property against the last round; it is not a distinguisher for the whole cipher.'
-        ),
-      ]),
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'The sieve recovers 8 of 16 key bits. ' }),
-        document.createTextNode(
-          'A unique surviving candidate is the final mixing key, which this key schedule makes the low byte of the master key. The other byte is untouched. A recovered subkey is not a recovered key.'
-        ),
-      ]),
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'A zero one-way entry does not bound the boomerang. ' }),
-        document.createTextNode(
-          'This is the negative claim this lab is built to demonstrate rather than assert. Act 2 proves a difference can never cross three rounds. Act 5 shows a crossing whose one-way table entry is zero, through which the round trip closes for all 256 middle states. Impossibility in one direction is not impossibility for a quartet, and any reasoning that treats it as such is wrong.'
-        ),
-      ]),
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'p2q2 is an estimate, and this page shows it missing twice. ' }),
-        document.createTextNode(
-          'Once at the switch, where a trail reading charges for a crossing the round trip does not have to pay -- measured exactly, over all 256 middle states. And once across the two backward pairs, which the estimate multiplies as if independent and which on this cipher are not, by a factor Act 4 reports. The second effect is a property of this toy, not a general law.'
-        ),
-      ]),
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'A one-layer switch can only help the boomerang. ' }),
-        document.createTextNode(
-          'The round-trip table is never below the one-way table, which the test suite proves entry by entry. So the switch cannot be what makes a boomerang RARER than p2q2 predicts. Murphy’s incompatibility, in the form where the real rate is far below the estimate, needs a middle section wider than one substitution layer -- which this page does not model and does not claim to.'
-        ),
-      ]),
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'The boomerang needs an adaptive decryption oracle. ' }),
-        document.createTextNode(
-          'The shifted ciphertexts are chosen after the first pair comes back, so the attacker must be able to decrypt texts of their choosing, adaptively. That is a strong model, and rectangle and amplified-boomerang attacks exist because it is often unavailable.'
-        ),
-      ]),
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'An end-to-end rate cannot be attributed to one trail. ' }),
-        document.createTextNode(
-          'Hundreds of middle paths share any pair of end differences, so a measured return rate is their total. Act 4 separates them by reading the real middle difference -- which needs the key, so it is an instrument and is labelled one -- and Act 5 avoids the problem by measuring the switch with nothing attached to it.'
-        ),
-      ]),
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'No key material is stored. ' }),
-        document.createTextNode(
-          'Keys come from the platform CSPRNG, live in memory for the session, and are never written anywhere. The only thing this page persists is the string "dark".'
-        ),
-      ]),
-      el('li', { role: 'listitem' }, [
-        el('strong', { text: 'Not in scope. ' }),
-        document.createTextNode(
-          'Attacks on real ciphers (referenced only), related-key boomerangs, rectangle and amplified variants beyond a sentence, and automated trail search by SAT or MILP. The trails here are hand-specified and their probabilities computed from the tables.'
-        ),
-      ]),
+    el('li', { role: 'listitem', id: 'neg-claim' }, [
+      el('strong', { text: 'A zero one-way entry does not bound the boomerang. ' }),
+      document.createTextNode(
+        'Act 2 proves a difference can never cross three rounds. Act 5 shows a crossing whose one-way entry is zero, through which the round trip closes for all 256 middle states. Impossibility in one direction is not impossibility for a quartet.'
+      ),
     ]),
+    el('li', { role: 'listitem' }, [
+      el('strong', { text: 'Everything measured is measured. ' }),
+      document.createTextNode(
+        'Every rate here comes from real encryptions in this tab, with its sample size and interval beside it. Nothing is simulated or replayed.'
+      ),
+    ]),
+    el('li', { role: 'listitem' }, [
+      el('strong', { text: 'p2q2 is an estimate, and it misses twice here. ' }),
+      document.createTextNode(
+        'Once at the switch, and once across the two backward pairs, which it multiplies as if independent and which on this cipher are not.'
+      ),
+    ]),
+  ]);
+
+  const more: [string, string][] = [
+    [
+      'The exhaustive checks are a luxury of a tiny block',
+      '256 plaintexts and 65 536 keys means an impossibility claim here can be checked by trying everything. For a real cipher that is out of reach and impossibility is argued structurally \u2014 which is what the structural argument on this page is for, and what the enumeration would catch being wrong.',
+    ],
+    [
+      'The impossible differential covers three rounds, not four',
+      'On the full four-round cipher every output difference is reachable from every input difference: there is no four-round impossible differential. Act 3 uses the three-round property against the last round; it is not a distinguisher for the whole cipher.',
+    ],
+    [
+      'The sieve recovers 8 of 16 key bits',
+      'A unique surviving candidate is the final mixing key, which this key schedule makes the low byte of the master key. The other byte is untouched. A recovered subkey is not a recovered key.',
+    ],
+    [
+      'A one-layer switch can only help the boomerang',
+      'The round-trip table is never below the one-way table, proven entry by entry in the suite. So the switch cannot be what makes a boomerang RARER than p2q2 predicts. Murphy\u2019s incompatibility in that form needs a middle section wider than one substitution layer, which this page does not model and does not claim to.',
+    ],
+    [
+      'The boomerang needs an adaptive decryption oracle',
+      'The shifted ciphertexts are chosen after the first pair comes back, so the attacker must decrypt texts of their choosing, adaptively. Rectangle and amplified-boomerang attacks exist because that is often unavailable.',
+    ],
+    [
+      'An end-to-end rate cannot be attributed to one trail',
+      'Hundreds of middle paths share any pair of end differences, so a measured return rate is their total. Act 4 separates them by reading the real middle difference \u2014 which needs the key, so it is labelled an instrument \u2014 and Act 5 avoids the problem by measuring the switch with nothing attached.',
+    ],
+    [
+      'Intervals resample keys, not quartets',
+      'The 128 quartets one key contributes share its subkeys, so they are not 128 independent trials. Every interval here is a cluster bootstrap over keys; the narrower pooled Wilson interval is shown beside it in Act 4 so the cost of the independence assumption is visible.',
+    ],
+    [
+      'No key material is stored, and what the share link carries',
+      'Keys come from the platform CSPRNG, live in memory for the session, and are never written anywhere. The only thing this page persists is the string \u201cdark\u201d. A share link carries the controls and the 16-bit demo key so a run is reproducible \u2014 a toy key for a toy cipher, with no secrecy value.',
+    ],
+    [
+      'Not in scope',
+      'Attacks on real ciphers (referenced only), related-key boomerangs, rectangle and amplified variants beyond a sentence, and automated trail search by SAT or MILP. The trails here are hand-specified and their probabilities computed from the tables.',
+    ],
+  ];
+
+  return el('section', { class: 'card card-honest', 'aria-labelledby': 'honest-title', id: 'honesty' }, [
+    el('h2', { class: 'act-title', id: 'honest-title', text: 'What is real here, and what this does not prove' }),
+    summary,
+    el('h3', { class: 'subhead', text: 'The rest of the limits, in full' }),
+    ...more.map(([title, body]) => disclosure(title, [el('p', { text: body })])),
   ]);
 }

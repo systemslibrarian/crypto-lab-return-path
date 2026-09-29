@@ -132,23 +132,32 @@ export function roundTables(ddt: Table, maxRounds: number): RoundTables[] {
   return out;
 }
 
-/** The highest-probability trail over `rounds` layers, and where it goes. */
-export interface BestDifferential {
+/**
+ * An endpoint pair, with BOTH probabilities for it. Which quantity was maximised
+ * to pick it is the caller's business, and the name of the function that did so.
+ */
+export interface Endpoints {
   readonly rounds: number;
   readonly alpha: number;
   readonly delta: number;
+  /** Product of DDT entries along the single most probable path between them. */
   readonly trailProbability: number;
+  /** Sum over every path between them. */
   readonly differentialProbability: number;
 }
 
-export function bestDifferential(tables: RoundTables): BestDifferential {
-  let bp = 0;
+function argmax(
+  tables: RoundTables,
+  pick: (a: number, d: number) => number
+): Endpoints {
+  let best = 0;
   let ba = 0;
   let bd = 0;
   for (let a = 1; a < BLOCK_SIZE; a++) {
     for (let d = 1; d < BLOCK_SIZE; d++) {
-      if (tables.trail[a][d] > bp) {
-        bp = tables.trail[a][d];
+      const v = pick(a, d);
+      if (v > best) {
+        best = v;
         ba = a;
         bd = d;
       }
@@ -158,9 +167,31 @@ export function bestDifferential(tables: RoundTables): BestDifferential {
     rounds: tables.rounds,
     alpha: ba,
     delta: bd,
-    trailProbability: bp,
+    trailProbability: tables.trail[ba][bd],
     differentialProbability: tables.differential[ba][bd],
   };
+}
+
+/**
+ * The endpoint pair joined by the single most probable TRAIL.
+ *
+ * This is what a trail-searching cryptanalyst finds, and it is NOT the same
+ * thing as the best differential -- from four rounds on this cipher the two
+ * disagree, which is a result rather than a caveat. Naming them apart is the
+ * whole point: a function called `bestDifferential` that maximised the trail is
+ * how a page ends up claiming more than it computed.
+ */
+export function bestTrail(tables: RoundTables): Endpoints {
+  return argmax(tables, (a, d) => tables.trail[a][d]);
+}
+
+/**
+ * The endpoint pair with the highest DIFFERENTIAL probability -- every path
+ * between them summed. On an 8-bit block this is an exhaustive search over all
+ * 65 025 nonzero endpoint pairs, so it is the true maximum, not a heuristic.
+ */
+export function bestDifferential(tables: RoundTables): Endpoints {
+  return argmax(tables, (a, d) => tables.differential[a][d]);
 }
 
 /**

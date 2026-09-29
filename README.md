@@ -15,8 +15,12 @@ A browser lab for the two second-generation differential techniques, run against
 the **same toy SPN cipher** as [Biham Lens](https://github.com/systemslibrarian/crypto-lab-biham-lens)
 and [Matsui Line](https://github.com/systemslibrarian/crypto-lab-matsui-line) — 8-bit
 block, 16-bit key, four rounds of key-mix / 4-bit substitution / bit permutation.
-The cipher is reused byte for byte, not reimplemented, so all three labs attack
-one target; the agreement is a test, not a claim (see **Build & Verify**).
+The cipher is **reimplemented here and checked exhaustively against the sibling
+lab's own function** — the S-box, permutation and key-schedule constants are
+copied, and the tests transcribe biham-lens's `encrypt` longhand and compare
+every plaintext against it. "Byte for byte" is the result, not the method, and
+the difference matters: the agreement is a test, not a claim (see
+**Build & Verify**).
 
 Three primitives, all hand-rolled so the internals are inspectable:
 
@@ -54,22 +58,29 @@ sentence rather than asserting either.
 
 ## Exhibits
 
+The page opens on the result: a live teaser showing the two table entries side by
+side — `0/16` one way, `16/16` on the round trip — with one action that lands you
+in Act 5 with the quartet already stepping. A chapter navigator follows, then the
+acts in order.
+
 0. **The cipher you already broke.** The S-box, the bit permutation and the key
    schedule, shown the way the sibling labs show them. A disclosure notes the
    schedule's period of four, which Act 3 later exploits.
-1. **One trail is not enough.** The best differential trail for 1…6 rounds, with
-   three numbers per round: the single-trail prediction (a product of DDT
-   entries), the differential's real probability (a sum over every trail), and
-   the measured rate over real encryptions. The expected right pairs in the whole
-   codebook fall below one at five rounds — and the single-trail prediction is out
-   by a factor of ten at six, which the chart shows and the verdict names.
-2. **A difference that never happens.** Type any input and output difference and
-   press *Try to make it happen*. The page computes whether the structural
-   argument rules it out, then encrypts real pairs and counts. The shipped pair
-   is ruled out, and choosing *all 65 536 keys* checks it against every key the
-   cipher has. Alongside it, the miss-in-the-middle certificate: five
-   forward-reachable middle differences, seventy-seven backward-required ones, and
-   nothing in both.
+1. **One trail is not enough.** The best trail for 1…6 rounds, with three numbers
+   per round: the single-trail prediction (a product of DDT entries), the
+   differential's real probability (a sum over every trail), and the measured
+   rate. The threshold where the expected right pairs in the whole codebook fall
+   below one is marked on the chart itself. Two results: the single-trail
+   prediction is out by a factor of ten at six rounds, and from four rounds on the
+   best trail does not even point at the best differential — a different endpoint
+   pair, found by exhausting all 65 025 of them.
+2. **A difference that never happens.** A miss-in-the-middle diagram leads: the
+   forward-reachable middle differences on one side, the backward-required ones on
+   the other, and an explicitly empty intersection between them. Then type any two
+   differences and press *Try to make it happen* — the page encrypts real pairs and
+   counts, and *all 65 536 keys* checks it against every key the cipher has.
+   Changing an input retires the verdict rather than leaving it to look like an
+   answer to a question nobody asked.
 3. **Eliminating keys with an event that cannot occur.** The three-round
    impossible differential aimed at the last round of the **full four-round
    cipher**. 256 candidates for the final mixing key fall as pairs arrive; the
@@ -78,20 +89,32 @@ sentence rather than asserting either.
 4. **The boomerang.** The quartet procedure against the real cipher, with the
    measured return rate set against `p²q²`, against the BCT-corrected estimate,
    and against the same procedure run on **real random permutations** — the null a
-   distinguisher has to beat. Degenerate quartets are excluded and counted, and a
-   decomposition reports what share of the returns followed the stated trail.
+   distinguisher has to beat. Intervals are a cluster bootstrap over keys, with
+   the narrower pooled interval shown beside them so the cost of assuming
+   independence is visible. Degenerate quartets are excluded and counted, the
+   per-key spread is drawn as a distribution, and a decomposition reports what
+   share of the returns followed the stated trail.
 5. **The switch, where the estimate breaks.** The headline exhibit, in two parts.
-   A real quartet stepped through eight stages — every value produced by the real
-   cipher under a real key — stopping at the switch to show the one-way table
-   entry of zero before the round trip closes anyway. Then the switch measured on
-   its own over **all 256 middle states**: no sampling, no interval, exact. Four
-   cases, of which the BCT explains all four and the trail reading gets three
-   wrong.
+   A real quartet stepped through eight stages on a square whose corners never
+   move — every value produced by the real cipher under a real key — stopping at
+   the switch to show the one-way table entry of zero before the round trip closes
+   anyway. Then the switch measured on its own over **all 256 middle states**: no
+   sampling, no interval, exact. Four cases, of which the BCT explains all four and
+   the trail reading gets three wrong. The split point is a control, so you can
+   move the switch and watch `p`, `q` and the estimate move with it.
 6. **Why anyone cares.** Skipjack, IDEA, COCONUT98, AES-192/256, and the
    Murphy → Cid et al. correction, with round counts checked and complexities
    deliberately not quoted.
 
 Plus a permanent honesty panel, outside every disclosure.
+
+### A note on the palette
+
+The build brief proposed `#F472B6`. This lab ships `#9f88ff` instead, because the
+catalog's `CLAUDE.md` fixes a four-colour accent rotation and requires
+neighbouring cards to differ: Biham Lens and Matsui Line both use `#ff6b7f`, and
+`#F472B6` reads as the same colour beside them. Violet is on-palette and distinct
+from all three of this lab's nearest neighbours in the cryptanalysis section.
 
 ## When to Use It
 
@@ -110,10 +133,15 @@ constant-time — nothing in this lab attempts it.
 **<https://systemslibrarian.github.io/crypto-lab-return-path/>**
 
 You can: change the substitution table and watch every measurement rerun; type
-your own differences and try to make an impossible one happen; raise any run to
-the whole 65 536-key space; step a real boomerang quartet through the switch one
-stage at a time; pick a switch that can never close and see the page refuse to
-show a quartet; and weaken the sieve until it runs out of data.
+your own differences and try to make an impossible one happen; set the round
+count in Acts 2 and 3; raise any run to the whole 65 536-key space; move the
+boomerang's split point and watch p, q and the estimate move with it; step a real
+quartet through the switch one stage at a time; pick a switch that can never
+close and see the page refuse to show a quartet; weaken the sieve until it runs
+out of data; and copy a link that reproduces any run exactly.
+
+Every run prints its elapsed time and whether a Worker or the main-thread
+fallback produced it.
 
 ## What Can Go Wrong
 
@@ -147,7 +175,18 @@ wired to a test:
   claim to.
 - **Small blocks distort the boomerang.** Degenerate quartets, where the
   ciphertext shift happens to equal the pair's own difference, return for free.
-  Negligible at 64 bits; percent-scale here. They are excluded and counted.
+  Negligible at 64 bits; percent-scale here. They are excluded and counted — and
+  that exclusion moves the random baseline from `1/255` to **`1/253`**, which the
+  page uses and the tests derive by enumerating every permutation of a smaller
+  block.
+- **Pooled intervals lie when the samples are clustered.** The 128 quartets one
+  key contributes share its subkeys, so treating them as 128 independent trials
+  reports an interval that is too narrow. Every interval here resamples keys.
+- **A trail search does not find the best differential.** From four rounds on,
+  the endpoint pair joined by the strongest trail is not the pair with the
+  strongest differential. A tool that maximises one and reports the other is
+  claiming more than it computed, which is why this lab names the two functions
+  apart.
 - **A trail probability is not a promise about your key.** Only 6 144 of the
   65 536 keys carry a quartet realising the shipped trail, and for one of the four
   cases **no key does**. The page reports which key it found and how many it tried.
@@ -194,11 +233,11 @@ npm run dev          # http://localhost:5173/crypto-lab-return-path/
 ```
 
 ```sh
-npm test             # 137 unit tests (Vitest)
+npm test             # 155 unit tests (Vitest)
 npm run build        # tsc --noEmit && vite build
 npx playwright install chromium
 npm run test:a11y    # the axe WCAG 2.1 A/AA gate
-npm run test:claims  # does the page tell the truth
+npm run test:claims  # 50 claims tests + 7 entry-experience gates
 ```
 
 `npx playwright install chromium` — never `--with-deps`. That apt step wedged 547
@@ -207,21 +246,26 @@ Chromium needs.
 
 ## Related Demos
 
+This is the third lab on one cipher, and the three are meant to be read in order.
+
 - **[Biham Lens](https://systemslibrarian.github.io/crypto-lab-biham-lens/)** —
-  differential cryptanalysis on this exact cipher, and where it is defined. Start
-  here if "differential" is new.
+  differential cryptanalysis, and where this cipher is defined. Start here if
+  "differential" is new; Act 1 assumes it.
 - **[Matsui Line](https://systemslibrarian.github.io/crypto-lab-matsui-line/)** —
   linear cryptanalysis on the same cipher, and the piling-up lemma's prediction
-  missing, which is the same shape of lesson as Act 1 here.
+  missing. The same shape of lesson as Act 1 here, in different mathematics.
+- **[Misty Lens](https://systemslibrarian.github.io/crypto-lab-misty-lens/)** —
+  the related-key *sandwich* distinguisher on MISTY1 and KASUMI: the boomerang's
+  close relative, in the stronger attack model this lab does not enter.
 - The rest of the suite: **[Crypto Lab](https://crypto-lab.systemslibrarian.dev/)**.
 
 ## Build & Verify
 
-**137 unit tests (Vitest), all passing.** The checks that matter most:
+**155 unit tests (Vitest), all passing.** The checks that matter most:
 
 | What | Where |
 |---|---|
-| The cipher is byte-for-byte `crypto-lab-biham-lens` — every plaintext, 1 024 keys, both S-boxes, against a longhand transcription of that lab's own function | `src/crypto/spn.test.ts` |
+| The cipher agrees with `crypto-lab-biham-lens` on every plaintext — 1 024 keys with the textbook S-box, 256 with PRESENT — against a longhand transcription of that lab's own function | `src/crypto/spn.test.ts` |
 | 16 pinned known-answer vectors, and the reference agreeing with all 16 | `src/crypto/spn.test.ts` |
 | The round-key extension leaves rounds 0–4 untouched, for **all 65 536 master keys** | `src/crypto/spn.test.ts` |
 | Only `K_R` is needed to sieve — checked against all 256 values of `K_{R-1}` | `src/crypto/spn.test.ts` |
@@ -232,6 +276,10 @@ Chromium needs.
 | Invariant I5: the sieve never eliminates the true subkey — 400 keys, fixed and random seeds | `src/crypto/experiments.test.ts` |
 | The switch measured over all 256 middle states equals the BCT for **all 65 025 (β, γ) pairs** | `src/crypto/experiments.test.ts` |
 | The boomerang beats a real random-permutation null with non-overlapping intervals, and `p²q²` overstates the measurement | `src/crypto/experiments.test.ts` |
+| The random-permutation null is `1/(N−3)`, not `1/(N−1)` — derived by enumerating **all 24 and all 40 320 permutations** of a 4- and an 8-element block under the same exclusion rule | `src/crypto/experiments.test.ts` |
+| Intervals resample keys, not quartets: the cluster bootstrap is wider than the pooled Wilson interval, and the distinguisher survives the correction at the shipped default | `src/crypto/experiments.test.ts` |
+| `bestTrail` and `bestDifferential` each maximise what their name says, against an exhaustive sweep of all 65 025 endpoint pairs — and disagree from four rounds on | `src/crypto/trails.test.ts` |
+| Latest-request-wins: out-of-order and twenty-deep responses authorise exactly one render, the newest, and a stale answer cannot clear the busy state | `src/ui/latest.test.ts` |
 
 **The WCAG 2.1 A/AA gate** (`e2e/a11y.spec.ts`) drives the lab through every
 state it teaches — all eight quartet steps, all four switch cases, every refusal
@@ -242,20 +290,35 @@ content against a ratcheted baseline (which is **empty**), and checks reflow,
 scroller keyboard reach and focus visibility. Zero violations; the deploy is
 blocked if that changes.
 
-**The claims suite** (`e2e/claims.spec.ts`) checks the page tells the truth: the
-DDT, the BCT and the switch rate are re-derived in the test from the S-box the
-page itself prints, every failure path names its actual cause, a changed input
-retires its verdict while re-entering the same value does not, and the negative
-claim's fixture is reached through the UI, shown to be green in every check, and
-asserted to carry its limitation on screen.
+**The claims suite** (`e2e/claims.spec.ts`, 43 tests) checks the page tells the
+truth: the DDT, the BCT, the switch rate and the miss-in-the-middle diagram's
+forward set are all re-derived in the test from the S-box the page itself prints;
+every failure path names its actual cause; a changed input retires its verdict
+while re-entering the same value does not; and the negative claim's fixture is
+reached through the UI, shown to be green in every check, and asserted to carry
+its limitation on screen, outside every disclosure.
+
+**The entry gate** (`e2e/entry.spec.ts`, 7 tests) enforces the things that make
+the page enterable rather than merely correct: a real interaction inside the
+first desktop viewport, the headline paradox complete within two phone screens,
+both of its numbers on screen and matching the page's own S-box, the teaser's one
+action landing on a stepped quartet, and a **ratcheted ceiling on arrival-state
+copy** — 2 200 words, down from 3 181 before the reduction pass. The ceiling may
+be lowered, never raised.
 
 ## Performance
 
 Everything runs in a Web Worker, with a main-thread fallback so a Worker that
-fails to load leaves a slow page rather than an empty one. On this machine: the
-arrival state settles in well under a second; the full 65 536-key exhaustive run
-in Act 2 takes about 3.5 seconds; Act 5's switch measurement is 256 operations and
-is instant. Every run prints its sample size and every rate its interval.
+fails to load leaves a slow page rather than an empty one. Every panel shows its
+elapsed time and which path produced it. On this machine: the arrival state
+settles in well under a second; the full 65 536-key exhaustive run in Act 2 takes
+about 3.5 seconds; Act 5's switch measurement is 256 operations and is instant.
+
+Every run prints its sample size, and every measured rate carries a confidence
+interval computed by resampling **keys** — the independent unit — rather than
+quartets. Rapid changes cannot show one input's label beside another's evidence:
+each panel issues a monotonic request ticket and drops any response that is no
+longer the newest, including for the purpose of clearing its busy state.
 
 ---
 

@@ -47,6 +47,12 @@ export interface LineChartOptions {
   readonly series: readonly Series[];
   /** Horizontal reference lines, e.g. "one right pair" or the random floor. */
   readonly rules?: readonly { at: number; label: string; colorVar: string }[];
+  /**
+   * A vertical marker on one x position, for the event the chart exists to show.
+   * Act 1's threshold crossing is the whole point of that chart, and a reader
+   * should not have to compute it from a table to see it.
+   */
+  readonly marker?: { atIndex: number; label: string; colorVar: string };
   readonly width?: number;
   readonly height?: number;
 }
@@ -145,6 +151,37 @@ export function lineChart(opts: LineChartOptions): HTMLElement {
           fill: `var(${rule.colorVar})`,
         },
         [document.createTextNode(rule.label)]
+      )
+    );
+  }
+
+  if (opts.marker && opts.marker.atIndex >= 0 && opts.marker.atIndex < n) {
+    const x = xAt(opts.marker.atIndex);
+    kids.push(
+      svg('line', {
+        x1: x,
+        y1: PAD.top,
+        x2: x,
+        y2: PAD.top + plotH,
+        stroke: `var(${opts.marker.colorVar})`,
+        'stroke-width': 2,
+        'stroke-dasharray': '4 3',
+      })
+    );
+    // The label is anchored away from the plot edge so it never clips at 380px.
+    const anchor = opts.marker.atIndex > n / 2 ? 'end' : 'start';
+    kids.push(
+      svg(
+        'text',
+        {
+          x: anchor === 'end' ? x - 6 : x + 6,
+          y: PAD.top + 11,
+          class: 'chart-label',
+          'text-anchor': anchor,
+          fill: `var(${opts.marker.colorVar})`,
+          'font-weight': '700',
+        },
+        [document.createTextNode(opts.marker.label)]
       )
     );
   }

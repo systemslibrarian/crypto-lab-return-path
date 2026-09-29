@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { getSbox } from './sbox.ts';
 import { tablesFor } from './tables.ts';
 import { BLOCK_SIZE, generateKey } from './spn.ts';
-import { bestDifferential, roundTables } from './trails.ts';
+import { bestTrail, roundTables } from './trails.ts';
 import {
   MASTER_KEY_SPACE,
   RANDOM_RETURN_RATE,
+  clusterInterval,
   decomposeBoomerang,
   findQuartet,
   findQuartetAcrossKeys,
@@ -26,7 +27,7 @@ describe('Act 1: measured differential probability', () => {
   it('lands on the differential prediction, not the single-trail one, at R=6', () => {
     // The whole point of Act 1. The single trail predicts 2^-11.25; the sum over
     // trails predicts 2^-7.91; the cipher does what the sum says.
-    const best = bestDifferential(wTables[5]);
+    const best = bestTrail(wTables[5]);
     const m = measureDifferential(best.alpha, best.delta, 6, weak, 4096, 20260929);
     const measured = m.hits / m.pairs;
     expect(Math.abs(Math.log2(measured) - Math.log2(best.differentialProbability))).toBeLessThan(0.12);
@@ -35,7 +36,7 @@ describe('Act 1: measured differential probability', () => {
 
   it('agrees with prediction to within 0.15 bits at every round count', () => {
     for (let r = 1; r <= 6; r++) {
-      const best = bestDifferential(wTables[r - 1]);
+      const best = bestTrail(wTables[r - 1]);
       const m = measureDifferential(best.alpha, best.delta, r, weak, 4096, 777 + r);
       const measured = m.hits / m.pairs;
       expect(
@@ -176,11 +177,116 @@ describe('Act 4: the boomerang distinguisher', () => {
     expect(cipher.ci[0]).toBeGreaterThan(nullRun.ci[1]);
   });
 
-  it('the random-permutation null sits on 1/(2^n - 1)', () => {
+  it('the random-permutation null sits on the derived rate', () => {
     const nullRun = runBoomerangNull(0x0b, 0x50, 3000, 4242);
     expect(Math.abs(nullRun.rate - RANDOM_RETURN_RATE)).toBeLessThan(3e-4);
     expect(nullRun.ci[0]).toBeLessThan(RANDOM_RETURN_RATE);
     expect(nullRun.ci[1]).toBeGreaterThan(RANDOM_RETURN_RATE);
+  });
+
+  /**
+   * THE NULL IS 1/(N-3), NOT 1/(N-1), AND THAT IS DERIVED HERE RATHER THAN
+   * ASSERTED.
+   *
+   * The exclusion rule changes the answer: once the degenerate quartet is
+   * dropped, P3 and P4 are two distinct plaintexts outside {P1, P2}, so P3 has
+   * N-2 choices and P4 the N-3 that remain, exactly one of which is P3 XOR alpha.
+   *
+   * Rather than take that argument on trust, these enumerate EVERY permutation of
+   * a 4- and an 8-element block -- 24 and 40 320 of them -- run the same quartet
+   * procedure with the same exclusion, and confirm the exact rate. Two block
+   * sizes, because one could be a coincidence and two pin the formula. 16! is out
+   * of reach, which is why the argument above is what carries N = 256; the small
+   * cases are what would catch it being wrong.
+   */
+  function exactNullRate(N: number): number {
+    const ids = Array.from({ length: N }, (_, i) => i);
+    let ret = 0;
+    let tot = 0;
+    const permute = (rest: number[], acc: number[]): void => {
+      if (rest.length === 0) {
+        const E = acc;
+        const D = new Array<number>(N);
+        for (let i = 0; i < N; i++) D[E[i]] = i;
+        for (let a = 1; a < N; a++) {
+          for (let d = 1; d < N; d++) {
+            for (let p1 = 0; p1 < N; p1++) {
+              const p2 = p1 ^ a;
+              if (p2 < p1) continue;
+              const c1 = E[p1];
+              const c2 = E[p2];
+              if ((c1 ^ c2) === d) continue; // the same exclusion the experiment uses
+              tot++;
+              if ((D[c1 ^ d] ^ D[c2 ^ d]) === a) ret++;
+            }
+          }
+        }
+        return;
+      }
+      for (let i = 0; i < rest.length; i++) {
+        const next = rest.slice();
+        const [x] = next.splice(i, 1);
+        permute(next, [...acc, x]);
+      }
+    };
+    permute(ids, []);
+    return ret / tot;
+  }
+
+  it('is exactly 1/(N-3) over ALL 24 permutations of a 4-element block', () => {
+    expect(exactNullRate(4)).toBe(1 / (4 - 3));
+  });
+
+  it('is exactly 1/(N-3) over ALL 40 320 permutations of an 8-element block', () => {
+    const rate = exactNullRate(8);
+    expect(rate).toBeCloseTo(1 / (8 - 3), 12);
+    // And NOT the 1/(N-1) a reader expects, which is the whole point.
+    expect(Math.abs(rate - 1 / (8 - 1))).toBeGreaterThan(0.05);
+  }, 120_000);
+
+  it('the constant the page prints follows that formula at the real block size', () => {
+    expect(RANDOM_RETURN_RATE).toBe(1 / (BLOCK_SIZE - 3));
+    expect(RANDOM_RETURN_RATE).not.toBe(1 / (BLOCK_SIZE - 1));
+  });
+
+  it('CLUSTERING: resampling keys gives a wider interval than pooling quartets', () => {
+    // The quartets one key contributes share its subkeys, so pooling them treats
+    // correlated events as independent ones. Measured, not argued.
+    const r = runBoomerang(0x0b, 0x50, 3, weak, 512, 31337);
+    const pooledWidth = r.ciPooled[1] - r.ciPooled[0];
+    const clusterWidth = r.ci[1] - r.ci[0];
+    expect(clusterWidth).toBeGreaterThan(pooledWidth);
+    // Both must still bracket the point estimate the page reports.
+    expect(r.ci[0]).toBeLessThanOrEqual(r.rate);
+    expect(r.ci[1]).toBeGreaterThanOrEqual(r.rate);
+  });
+
+  it('CLUSTERING: the correction does not dissolve the distinguisher', () => {
+    // The acceptance criterion for the fix: after widening, the cipher's interval
+    // and the null's must still be disjoint at the SHIPPED default key count.
+    const cipher = runBoomerang(0x0b, 0x50, 3, weak, 512, 31337);
+    const nullRun = runBoomerangNull(0x0b, 0x50, 512, 0x5bd1 ^ 31337);
+    expect(cipher.ci[0]).toBeGreaterThan(nullRun.ci[1]);
+  });
+
+  it('clusterInterval degrades to Wilson for a single cluster', () => {
+    const one = clusterInterval([{ successes: 5, trials: 100 }]);
+    const w = wilsonInterval(5, 100);
+    expect(one).toEqual(w);
+  });
+
+  it('clusterInterval brackets the pooled ratio, not the mean of per-key rates', () => {
+    // Keys contribute different numbers of quartets when degenerate ones are
+    // excluded, so a mean of rates would silently upweight the small ones.
+    const clusters = [
+      { successes: 10, trials: 100 },
+      { successes: 0, trials: 4 },
+      { successes: 3, trials: 60 },
+    ];
+    const pooled = 13 / 164;
+    const [lo, hi] = clusterInterval(clusters, 7, 3000);
+    expect(lo).toBeLessThanOrEqual(pooled);
+    expect(hi).toBeGreaterThanOrEqual(pooled);
   });
 
   it('p^2q^2 overstates the measured rate on this cipher', () => {

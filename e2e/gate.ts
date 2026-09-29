@@ -10,6 +10,15 @@ export const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 export const NARROW = { width: 380, height: 800 };
 
 /**
+ * Every `<details>` the page ships, all shut on arrival: one per act, two in the
+ * context panel, and the rest in the honesty panel, where the detailed
+ * limitations live. The four-line honesty SUMMARY and the negative claim inside
+ * it are deliberately NOT among them -- a limitation a reader has to open a panel
+ * to find is one the page is hiding, and `claims.spec.ts` asserts both stay out.
+ */
+export const DISCLOSURE_COUNT = 17;
+
+/**
  * Shared machinery for the WCAG gate.
  *
  * Five rules govern everything here, and each one corrects something the gate
@@ -305,14 +314,34 @@ export async function boot(page: Page, theme: 'dark' | 'light'): Promise<void> {
   await expect(page.locator('#cl-theme-toggle')).toHaveCount(0);
 
   // ── Every measuring panel has actually reported ─────────────────────────
-  // Not "has rendered": has a VERDICT. Each of these replaces a "Measuring..."
-  // placeholder, so waiting on them is waiting on the Worker round trip.
-  await expect(page.locator('#decay-out .verdict')).toHaveCount(2);
-  await expect(page.locator('#imp-out .verdict')).toHaveCount(1);
-  await expect(page.locator('#sieve-out .verdict')).toHaveCount(2);
-  await expect(page.locator('#boom-out .verdict')).toHaveCount(2);
-  await expect(page.locator('#switch-out .verdict')).toHaveCount(1);
+  // Waited on `data-run`, which each panel stamps once per COMPLETED render, not
+  // on a verdict count -- a count is satisfied by the previous render, and on a
+  // first load it is also satisfied by any renderer that happens to emit the
+  // right number of verdicts while having thrown halfway through.
+  for (const panel of ['#decay-out', '#imp-out', '#sieve-out', '#boom-out', '#switch-out', '#walk-out']) {
+    await expect(page.locator(panel)).not.toHaveAttribute('data-run', '0');
+  }
+  // And each really did render its content, not merely stamp itself.
+  await expect(page.locator('#decay-out .verdict')).not.toHaveCount(0);
+  await expect(page.locator('#imp-out .verdict')).not.toHaveCount(0);
+  await expect(page.locator('#sieve-out .verdict')).not.toHaveCount(0);
+  await expect(page.locator('#boom-out .verdict')).not.toHaveCount(0);
+  await expect(page.locator('#switch-out .verdict')).not.toHaveCount(0);
   await expect(page.locator('#walk-out .step-line')).toHaveCount(8);
+
+  // ── The teaser: the page's headline claim, above the fold ───────────────
+  await expect(page.locator('#teaser .teaser-cell-val')).toHaveCount(2);
+  await expect(page.locator('#teaser-step')).toBeEnabled();
+  await expect(page.locator('.chapter-link')).toHaveCount(5);
+
+  // Result containers are labelled REGIONS with a busy flag, not live statuses:
+  // a `status` wrapped around a whole panel re-reads charts, tables and verdicts
+  // on every rerun. The announcements are separate one-line live regions.
+  for (const panel of ['#decay-out', '#imp-out', '#sieve-out', '#boom-out', '#switch-out', '#walk-out']) {
+    await expect(page.locator(panel)).toHaveAttribute('role', 'region');
+    await expect(page.locator(panel)).not.toHaveAttribute('aria-busy', 'true');
+  }
+  await expect(page.locator('[role="status"]')).toHaveCount(7);
 
   // ── The shipped defaults, named ─────────────────────────────────────────
   await expect(page.locator('#global-sbox')).toHaveValue('weak');
@@ -335,10 +364,12 @@ export async function boot(page: Page, theme: 'dark' | 'light'): Promise<void> {
   );
 
   // ── Disclosures ship shut ───────────────────────────────────────────────
-  // Seven of them. The gate this replaces opened every one from script before
-  // its only scan, so the shut state - which is what every reader arrives at -
-  // was never scanned.
-  await expect(page.locator('details')).toHaveCount(7);
+  // The gate this replaces opened every one from script before its only scan, so
+  // the shut state - which is what every reader arrives at - was never scanned.
+  // The count is pinned as well as the state, because an accidental `open` on a
+  // new disclosure is exactly the kind of thing that changes what gets scanned
+  // without changing anything that looks like a test.
+  await expect(page.locator('details')).toHaveCount(DISCLOSURE_COUNT);
   await expect(page.locator('details[open]')).toHaveCount(0);
 
   await settle(page);
@@ -764,13 +795,35 @@ async function awaitRerender(page: Page, panel: string, before: string): Promise
 export async function driveAllStates(page: Page, theme: string): Promise<void> {
   const scanAt = (s: string): Promise<void> => scan(page, `${theme} / ${s}`);
 
-  await scanAt('arrival: five panels measured, seven disclosures shut, walk on step 1');
+  await scanAt('arrival: the teaser, five panels measured, every disclosure shut, walk on step 1');
 
   // ── The shared skip link, focused ───────────────────────────────────────
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur?.());
+  // FIRST, before anything is clicked. `blur()` clears `activeElement` but NOT
+  // the sequential focus navigation starting point, so a Tab after a click
+  // continues from that click rather than from the top of the document -- which
+  // made this assertion fail once the drive grew steps above it.
   await page.keyboard.press('Tab');
   await expect(page.locator('a.cl-skip-link')).toBeFocused();
   await scanAt('the shared skip link focused, slid in from top:-3rem');
+
+  // ── The teaser and the chapter navigator ────────────────────────────────
+  // Both are new chrome above the acts, and both are sticky or near-sticky, so
+  // they are painted over other content at every scroll position.
+  await page.locator('#teaser-step').focus();
+  await expect(page.locator('#teaser-step')).toBeFocused();
+  await scanAt('the teaser action focused, above the fold');
+
+  await page.locator('.chapter-link').first().focus();
+  await expect(page.locator('.chapter-link').first()).toBeFocused();
+  await scanAt('the first chapter link focused');
+
+  // The chapter row marks the section in view, which repaints a pill to the
+  // accent fill with its own ink -- a state no arrival scan reaches.
+  await page.locator('.chapter-link[data-chapter="act3"]').click();
+  await expect(page.locator('#act3')).toBeInViewport();
+  await expect(page.locator('.chapter-link[aria-current="true"]')).not.toHaveCount(0);
+  await scanAt('scrolled to Act 3, its chapter pill marked current');
+  await page.evaluate(() => window.scrollTo(0, 0));
 
   // ── Act 5: the quartet walk, every step ─────────────────────────────────
   // The headline mechanism. Step 8 paints the alarm verdict that is this lab's
@@ -824,6 +877,27 @@ export async function driveAllStates(page: Page, theme: string): Promise<void> {
   await expect(page.locator('.seg-btn[data-case="ladder"]')).toHaveAttribute('aria-pressed', 'true');
   await awaitRerender(page, '#boom-out', ladderBoomBefore);
   await scanAt('Act 5: back on the ladder case, the pressed toggle hovered');
+
+  // ── Act 5: the split point moved ────────────────────────────────────────
+  // Moving the switch recomputes p and q, and at some positions one half has no
+  // trail at all -- a refusal verdict the default state never shows.
+  {
+    const before = await runId(page, '#switch-out');
+    await page.locator('#switch-round').selectOption('3');
+    await awaitRerender(page, '#switch-out', before);
+    await scanAt('Act 5: the switch moved to round 3');
+  }
+  {
+    const before = await runId(page, '#switch-out');
+    await page.locator('#switch-round').selectOption('1');
+    await awaitRerender(page, '#switch-out', before);
+    await scanAt('Act 5: the switch moved to round 1, the first half empty');
+  }
+  {
+    const before = await runId(page, '#switch-out');
+    await page.locator('#switch-round').selectOption('2');
+    await awaitRerender(page, '#switch-out', before);
+  }
 
   // ── Act 5: both 16x16 tables, opened through their summary ──────────────
   await page.locator('#act5 details > summary').first().click();
@@ -916,6 +990,42 @@ export async function driveAllStates(page: Page, theme: string): Promise<void> {
   await expect(page.locator('#act3 details[open]')).toHaveCount(1);
   await scanAt('Act 3: the cost disclosure open');
 
+  // ── Act 2: the rounds control, including the case with no impossible set ─
+  // Note the order: the select is changed FIRST, and the run id is read AFTER.
+  // Changing a control retires the standing verdict, which is itself a completed
+  // render and stamps `data-run` -- so a run id captured before the change is
+  // satisfied by the RETIREMENT rather than by the measurement that follows it.
+  await page.locator('#imp-rounds').selectOption('4');
+  {
+    const before = await runId(page, '#imp-out');
+    await page.locator('#imp-run').click();
+    await awaitRerender(page, '#imp-out', before);
+  }
+  await expect(page.locator('#imp-out .imp-verdict')).toHaveCount(1);
+  await scanAt('Act 2: four rounds, where no impossible differential exists');
+
+  await page.locator('#imp-rounds').selectOption('3');
+  {
+    const before = await runId(page, '#imp-out');
+    await page.locator('#imp-run').click();
+    await awaitRerender(page, '#imp-out', before);
+  }
+  await expect(page.locator('#imp-out .imp-verdict.verdict-pass')).toHaveCount(1);
+
+  // ── Act 2: the retirement state ─────────────────────────────────────────
+  // A verdict replaced by a notice that it no longer answers the question on
+  // screen. Its own tone, its own border, reachable only by editing an input.
+  await page.locator('#imp-delta').fill('0x02');
+  await expect(page.locator('#imp-out .imp-retired')).toHaveCount(1);
+  await scanAt('Act 2: the verdict retired after an input changed');
+  await page.locator('#imp-delta').fill('0x01');
+  {
+    const before = await runId(page, '#imp-out');
+    await page.locator('#imp-run').click();
+    await awaitRerender(page, '#imp-out', before);
+  }
+  await expect(page.locator('#imp-out .imp-verdict.verdict-pass')).toHaveCount(1);
+
   // ── Act 1 and Act 4 at larger sample sizes ──────────────────────────────
   const decayBefore = await runId(page, '#decay-out');
   await page.locator('#decay-keys').selectOption('2048');
@@ -939,6 +1049,15 @@ export async function driveAllStates(page: Page, theme: string): Promise<void> {
   }
   await expect(page.locator('details[open]')).not.toHaveCount(0);
   await scanAt('the cipher tables and the reference list open');
+
+  // ── Act 4: the per-key distribution, and the share and reset actions ────
+  await page.locator('#act4 details > summary').first().click();
+  await expect(page.locator('#act4 .dist')).toHaveCount(1);
+  await scanAt('Act 4: the per-key distribution strip open');
+
+  await page.locator('#share-run').click();
+  await expect(page.locator('#share-out')).not.toBeEmpty();
+  await scanAt('the share action, with its result announced');
 
   // ── A focus ring on a native control, and on a select ───────────────────
   await page.locator('#global-sbox').focus();
@@ -966,4 +1085,14 @@ export async function driveAllStates(page: Page, theme: string): Promise<void> {
   await page.locator('#global-sbox').selectOption('weak');
   await awaitRerender(page, '#decay-out', backDecayBefore);
   await scanAt('back on the textbook S-box');
+
+  // ── Reset everything, and scan the state a reader lands back on ─────────
+  {
+    const before = await runId(page, '#sieve-out');
+    await page.locator('#reset-all').click();
+    await awaitRerender(page, '#sieve-out', before);
+    await expect(page.locator('#imp-alpha')).toHaveValue('0x0a');
+    await expect(page.locator('.seg-btn[aria-pressed="true"]')).toHaveAttribute('data-case', 'ladder');
+    await scanAt('after Reset everything, with the disclosures still open');
+  }
 }

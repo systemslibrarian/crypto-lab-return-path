@@ -29,7 +29,7 @@ export default defineConfig({
     },
     {
       name: 'claims',
-      testMatch: /claims\.spec\.ts/,
+      testMatch: /(claims|entry)\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },
   ],

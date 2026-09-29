@@ -9,7 +9,7 @@
 
 import { getSbox, type SboxName } from './sbox.ts';
 import { tablesFor } from './tables.ts';
-import { bestDifferential, roundTables } from './trails.ts';
+import { bestDifferential, bestTrail, roundTables } from './trails.ts';
 import { generateKey, PAIRS_PER_CODEBOOK } from './spn.ts';
 import {
   decomposeBoomerang,
@@ -35,16 +35,29 @@ export interface DecayRequest {
 
 export interface DecayRow {
   readonly rounds: number;
+  /** The endpoint pair joined by the best single TRAIL -- what the chart tracks. */
   readonly alpha: number;
   readonly delta: number;
   readonly trailPrediction: number;
   readonly differentialPrediction: number;
   readonly measured: number;
+  readonly ci: readonly [number, number];
   readonly hits: number;
   readonly pairs: number;
   readonly keysUsed: number;
   readonly rightPairsInCodebook: number;
   readonly measuredRightPairs: number;
+  /**
+   * The endpoint pair with the highest DIFFERENTIAL probability, found by
+   * exhausting all 65 025 pairs. From four rounds on it is a DIFFERENT pair --
+   * the best trail does not even point at the best differential -- so the page
+   * reports both rather than letting one word stand for two quantities.
+   */
+  readonly bestDiffAlpha: number;
+  readonly bestDiffDelta: number;
+  readonly bestDiffPrediction: number;
+  readonly bestDiffMeasured: number;
+  readonly sameEndpoints: boolean;
 }
 
 export interface DecayResult {
@@ -146,21 +159,46 @@ export function runJob(req: JobRequest): JobResult {
       const tables = roundTables(ddt, req.maxRounds);
       const rows: DecayRow[] = [];
       for (let r = 1; r <= req.maxRounds; r++) {
-        const best = bestDifferential(tables[r - 1]);
-        const m = measureDifferential(best.alpha, best.delta, r, sbox, req.keyCount, req.seed + r);
+        const trailEnds = bestTrail(tables[r - 1]);
+        const diffEnds = bestDifferential(tables[r - 1]);
+        const same = trailEnds.alpha === diffEnds.alpha && trailEnds.delta === diffEnds.delta;
+        const m = measureDifferential(
+          trailEnds.alpha,
+          trailEnds.delta,
+          r,
+          sbox,
+          req.keyCount,
+          req.seed + r
+        );
         const measured = m.pairs > 0 ? m.hits / m.pairs : 0;
+        const m2 = same
+          ? m
+          : measureDifferential(
+              diffEnds.alpha,
+              diffEnds.delta,
+              r,
+              sbox,
+              req.keyCount,
+              req.seed + r
+            );
         rows.push({
           rounds: r,
-          alpha: best.alpha,
-          delta: best.delta,
-          trailPrediction: best.trailProbability,
-          differentialPrediction: best.differentialProbability,
+          alpha: trailEnds.alpha,
+          delta: trailEnds.delta,
+          trailPrediction: trailEnds.trailProbability,
+          differentialPrediction: trailEnds.differentialProbability,
           measured,
+          ci: m.ci,
           hits: m.hits,
           pairs: m.pairs,
           keysUsed: m.keysUsed,
-          rightPairsInCodebook: PAIRS_PER_CODEBOOK * best.differentialProbability,
+          rightPairsInCodebook: PAIRS_PER_CODEBOOK * trailEnds.differentialProbability,
           measuredRightPairs: PAIRS_PER_CODEBOOK * measured,
+          bestDiffAlpha: diffEnds.alpha,
+          bestDiffDelta: diffEnds.delta,
+          bestDiffPrediction: diffEnds.differentialProbability,
+          bestDiffMeasured: m2.pairs > 0 ? m2.hits / m2.pairs : 0,
+          sameEndpoints: same,
         });
       }
       return { kind: 'decay', rows, randomRightPairs: PAIRS_PER_CODEBOOK / 255 };

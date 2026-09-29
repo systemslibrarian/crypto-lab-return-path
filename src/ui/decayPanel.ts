@@ -1,31 +1,27 @@
 /**
  * Act 1 -- why one trail is not enough.
  *
- * Three quantities per round count, and the whole act is the gap between them:
- *   TRAIL         the product of DDT entries along the single best path. What a
- *                 cryptanalyst quotes as "p".
- *   DIFFERENTIAL  the sum over EVERY path with the same two endpoints. The real
- *                 probability under the standard independent-round-key model.
+ * Three quantities per round count, and the act is the gap between them:
+ *   TRAIL         the product of DDT entries along the single best path.
+ *   DIFFERENTIAL  the sum over EVERY path with the same two endpoints.
  *   MEASURED      what the cipher actually does, over real encryptions.
  *
- * The teaching point is not that the trail decays -- it is that the trail's
- * PREDICTION goes wrong while the differential's does not, and by six rounds the
- * single trail is out by a factor of ten. That is shown by measurement, not
- * asserted.
+ * The chart tracks the BEST TRAIL's endpoint pair, and says so. The best
+ * DIFFERENTIAL is a different endpoint pair from four rounds on, which the page
+ * reports separately rather than letting one word stand for two quantities.
  */
 import { compute } from './compute.ts';
 import type { DecayResult, DecayRow } from '../crypto/jobs.ts';
 import type { SboxName } from '../crypto/sbox.ts';
 import { MAX_ROUNDS, PAIRS_PER_CODEBOOK } from '../crypto/spn.ts';
 import { legend, lineChart } from './chart.ts';
+import { PanelRunner } from './panel.ts';
 import {
-  clear,
   disclosure,
   el,
   field,
   hex8,
   log2Label,
-  markRun,
   num,
   scrollRegion,
   stat,
@@ -35,20 +31,22 @@ import {
 export interface DecayPanel {
   readonly node: HTMLElement;
   run(sbox: SboxName): Promise<void>;
+  reset(sbox: SboxName): Promise<void>;
 }
 
 const KEY_CHOICES = [
-  { value: 256, label: '256 keys' },
-  { value: 2048, label: '2 048 keys' },
-  { value: 16384, label: '16 384 keys' },
+  { value: 256, label: '256 keys (32 768 pairs)' },
+  { value: 2048, label: '2 048 keys (262 144 pairs)' },
+  { value: 16384, label: '16 384 keys (2.1 M pairs)' },
   { value: 65536, label: 'all 65 536 keys (exhaustive)' },
 ];
+const DEFAULT_KEYS = '256';
 
 function rowsTable(rows: readonly DecayRow[]): HTMLElement {
-  return scrollRegion('Predicted and measured differential probability by round count', 'table-wrap', [
+  return scrollRegion('Predicted and measured probability by round count', 'table-wrap', [
     el('table', {}, [
       el('caption', {
-        text: 'The same numbers as the chart. Probabilities as powers of two; right pairs are out of the 128 pairs the full codebook offers.',
+        text: 'Probabilities as powers of two. The first three columns are the best trail’s endpoint pair; the last is the best differential, which is a different pair from four rounds on.',
       }),
       el('thead', {}, [
         el('tr', {}, [
@@ -60,6 +58,7 @@ function rowsTable(rows: readonly DecayRow[]): HTMLElement {
           el('th', { scope: 'col', text: 'measured' }),
           el('th', { scope: 'col', text: 'right pairs' }),
           el('th', { scope: 'col', text: 'pairs tested' }),
+          el('th', { scope: 'col', text: 'best differential' }),
         ]),
       ]),
       el(
@@ -75,6 +74,11 @@ function rowsTable(rows: readonly DecayRow[]): HTMLElement {
             el('td', { text: log2Label(r.measured) }),
             el('td', { text: r.measuredRightPairs.toFixed(2) }),
             el('td', { text: num(r.pairs) }),
+            el('td', {
+              text: r.sameEndpoints
+                ? 'same pair'
+                : `${hex8(r.bestDiffAlpha)}→${hex8(r.bestDiffDelta)} ${log2Label(r.bestDiffPrediction)}`,
+            }),
           ])
         )
       ),
@@ -83,95 +87,96 @@ function rowsTable(rows: readonly DecayRow[]): HTMLElement {
 }
 
 export function decayPanel(): DecayPanel {
-  const out = el('div', { id: 'decay-out', role: 'status', 'aria-live': 'polite', 'data-run': '0' }, [
-    el('p', { class: 'field-hint', text: 'Measuring...' }),
-  ]);
+  const runner = new PanelRunner<{ sbox: SboxName; keys: string }>(
+    'decay-out',
+    'Act 1 results: trail decay by round count'
+  );
 
   const keySelect = el('select', { id: 'decay-keys' });
   for (const c of KEY_CHOICES) {
     keySelect.append(el('option', { value: String(c.value), text: c.label }));
   }
-  keySelect.value = '256';
+  keySelect.value = DEFAULT_KEYS;
 
   const runBtn = el('button', { class: 'btn btn-primary', type: 'button', id: 'decay-run' }, [
     document.createTextNode('Measure the decay'),
-  ]);
+  ]) as HTMLButtonElement;
+  runner.manage(runBtn);
 
   let currentSbox: SboxName = 'weak';
 
   async function run(sbox: SboxName): Promise<void> {
     currentSbox = sbox;
     const keyCount = Number(keySelect.value);
-    runBtn.disabled = true;
-    runBtn.textContent = 'Measuring...';
-    clear(out);
-    out.append(
-      el('p', {
-        class: 'field-hint',
-        text: `Encrypting ${num(keyCount * PAIRS_PER_CODEBOOK)} pairs per round count...`,
-      })
+    await runner.run(
+      { sbox, keys: keySelect.value },
+      `Encrypting ${num(keyCount * PAIRS_PER_CODEBOOK)} pairs per round count…`,
+      () =>
+        compute({
+          kind: 'decay',
+          sbox,
+          maxRounds: MAX_ROUNDS,
+          keyCount,
+          seed: 20260929,
+        }) as Promise<DecayResult>,
+      (result) => render(result)
     );
-    const result = (await compute({
-      kind: 'decay',
-      sbox,
-      maxRounds: MAX_ROUNDS,
-      keyCount,
-      seed: 20260929,
-    })) as DecayResult;
-    render(result);
-    runBtn.disabled = false;
-    runBtn.textContent = 'Measure the decay';
   }
 
-  function render(result: DecayResult): void {
-    clear(out);
+  function render(result: DecayResult): string {
     const rows = result.rows;
     const last = rows[rows.length - 1];
     const firstBelowOne = rows.find((r) => r.measuredRightPairs < 1);
     const trailError = last.measured / last.trailPrediction;
+    const out = runner.out;
 
     out.append(
       el('div', { class: 'readout' }, [
         stat(
           'best trail at 6 rounds',
           log2Label(last.trailPrediction),
-          `${hex8(last.alpha)} -> ${hex8(last.delta)}`,
+          `${hex8(last.alpha)} → ${hex8(last.delta)}`,
           'warn'
         ),
-        stat('sum over all trails', log2Label(last.differentialPrediction), 'same two endpoints', undefined),
-        stat('measured', log2Label(last.measured), `${num(last.pairs)} real pairs`, 'accent'),
+        stat('every trail between those two, summed', log2Label(last.differentialPrediction), 'the differential'),
         stat(
-          'single-trail error',
-          `${trailError.toFixed(1)}x too low`,
-          'measured / trail prediction',
-          'bad'
+          'measured',
+          log2Label(last.measured),
+          `95% ${last.ci[0].toExponential(2)}–${last.ci[1].toExponential(2)}, ${num(last.pairs)} pairs`,
+          'accent'
         ),
+        stat('single-trail error', `${trailError.toFixed(1)}× too low`, 'measured ÷ trail', 'bad'),
       ])
     );
 
     const yMin = -13;
-    const yMax = 0;
+    const threshold = rows.find((r) => r.measuredRightPairs < 1);
     out.append(
       lineChart({
-        title: `Differential probability by round count: single best trail, sum over all trails, and measured, for the ${currentSbox === 'weak' ? 'textbook' : 'PRESENT'} S-box`,
+        title: `Probability of the best trail's endpoint pair, by round count: the single trail, every trail summed, and the measured rate`,
         xLabels: rows.map((r) => String(r.rounds)),
         xTitle: 'rounds',
         yTitle: 'log2 probability',
         yMin,
-        yMax,
-        rules: [
-          { at: -8, label: 'random: 2^-8', colorVar: '--series-null' },
-        ],
+        yMax: 0,
+        rules: [{ at: -8, label: 'random permutation', colorVar: '--series-null' }],
+        marker: threshold
+          ? {
+              atIndex: threshold.rounds - 1,
+              label: `${threshold.rounds} rounds: fewer than one right pair in the whole codebook`,
+              colorVar: '--bad',
+            }
+          : undefined,
         series: [
           {
-            label: 'single best trail (product of DDT entries)',
+            label: 'single best trail',
             colorVar: '--series-trail',
             dash: '7 4',
             marker: 'diamond',
             points: rows.map((r) => Math.log2(r.trailPrediction)),
           },
           {
-            label: 'sum over all trails (the differential)',
+            label: 'every trail summed',
             colorVar: '--series-differential',
             dash: '2 3',
             marker: 'square',
@@ -190,7 +195,7 @@ export function decayPanel(): DecayPanel {
     out.append(
       legend([
         { label: 'single best trail', colorVar: '--series-trail', dash: 'dash' },
-        { label: 'sum over all trails', colorVar: '--series-differential', dash: 'dash' },
+        { label: 'every trail summed', colorVar: '--series-differential', dash: 'dash' },
         { label: 'measured', colorVar: '--series-measured', dash: 'none' },
         { label: 'random permutation', colorVar: '--series-null', dash: 'dash' },
       ])
@@ -203,8 +208,8 @@ export function decayPanel(): DecayPanel {
           ? `THE TRAIL RUNS OUT AT ${firstBelowOne.rounds} ROUNDS`
           : 'THE TRAIL SURVIVES EVERY ROUND COUNT TESTED',
         firstBelowOne
-          ? `Buy the entire 256-plaintext codebook and you get ${firstBelowOne.measuredRightPairs.toFixed(2)} right pairs at ${firstBelowOne.rounds} rounds -- fewer than one. A random permutation would hand you ${result.randomRightPairs.toFixed(2)}. There is no longer a differential to attack with.`
-          : `Every round count tested still yields at least one right pair in the full codebook.`
+          ? `Buy the entire 256-plaintext codebook at ${firstBelowOne.rounds} rounds and you get ${firstBelowOne.measuredRightPairs.toFixed(2)} right pairs. Fewer than one. A random permutation hands you ${result.randomRightPairs.toFixed(2)}.`
+          : 'Every round count tested still yields at least one right pair in the full codebook.'
       )
     );
 
@@ -212,32 +217,39 @@ export function decayPanel(): DecayPanel {
       verdict(
         'fail',
         'AND THE SINGLE-TRAIL PREDICTION IS WRONG',
-        `At 6 rounds the best single trail predicts ${log2Label(last.trailPrediction)} and the cipher delivers ${log2Label(last.measured)} -- ${trailError.toFixed(1)} times more often. Hundreds of trails share those two endpoints, and a differential is their sum. Add them up and the prediction lands within ${Math.abs(Math.log2(last.measured) - Math.log2(last.differentialPrediction)).toFixed(2)} bits of the measurement.`
+        `At 6 rounds the best single trail predicts ${log2Label(last.trailPrediction)}; the cipher delivers ${log2Label(last.measured)}, ${trailError.toFixed(1)} times more often. A differential is the SUM over every trail between those endpoints — add them and the prediction lands within ${Math.abs(Math.log2(last.measured) - Math.log2(last.differentialPrediction)).toFixed(2)} bits.`
       )
     );
 
-    out.append(rowsTable(rows));
+    const diverge = rows.filter((r) => !r.sameEndpoints);
+    if (diverge.length > 0) {
+      const first = diverge[0];
+      out.append(
+        verdict(
+          'info',
+          `AND FROM ${first.rounds} ROUNDS THE BEST TRAIL DOES NOT EVEN POINT AT THE BEST DIFFERENTIAL`,
+          `At ${first.rounds} rounds the strongest trail runs ${hex8(first.alpha)} → ${hex8(first.delta)}, but the strongest differential is ${hex8(first.bestDiffAlpha)} → ${hex8(first.bestDiffDelta)} at ${log2Label(first.bestDiffPrediction)} — a different pair, found by exhausting all 65 025 of them. Searching for trails does not find it.`
+        )
+      );
+    }
 
     out.append(
-      disclosure('Why the two predictions come apart', [
+      disclosure('Inspect the evidence: every round, both endpoint pairs', [
+        rowsTable(rows),
         el('p', {}, [
           document.createTextNode(
-            'A trail fixes the difference after every round. A differential fixes only the two ends. At one round there is exactly one path between any two differences, so the two agree. Every extra round multiplies the number of paths, and the permutation here sends two bits of each S-box into each S-box of the next round, so the paths fan out fast.'
+            'A trail fixes the difference after every round; a differential fixes only the two ends. At one round there is exactly one path between any two differences, so they agree. Every extra round multiplies the paths, and this permutation sends two bits of each S-box into each S-box of the next round.'
           ),
         ]),
         el('p', {}, [
           document.createTextNode(
-            'The consequence cuts both ways, and both matter. A trail-based estimate UNDERSTATES a differential, so a designer who counts trails can believe a cipher safer than it is. And it is the same arithmetic that makes the boomerang estimate in Act 4 wrong -- for the opposite reason.'
-          ),
-        ]),
-        el('p', {}, [
-          document.createTextNode(
-            'The measured value is not identical to the summed prediction either. The sum assumes the round keys are independent; this key schedule repeats every four rounds, so they are not. The residual gap is that assumption failing, and it is small here.'
+            'The measured value is not identical to the summed prediction either. The sum assumes independent round keys; this schedule repeats every four rounds, so they are not. The residual gap is that assumption failing, and it is small here. Intervals are a cluster bootstrap over keys, not over pairs — the 128 pairs one key contributes are not 128 independent trials.'
           ),
         ]),
       ])
     );
-    markRun(out);
+
+    return `Trail decay measured over ${num(last.pairs)} pairs per round count. At six rounds the single-trail prediction is ${trailError.toFixed(1)} times too low.`;
   }
 
   const node = el('section', { class: 'card', 'aria-labelledby': 'act1-title', id: 'act1' }, [
@@ -247,22 +259,33 @@ export function decayPanel(): DecayPanel {
     ]),
     el('p', { class: 'act-lede' }, [
       document.createTextNode(
-        'Classical differential cryptanalysis needs one high-probability path all the way through the cipher. Add rounds and the path decays, until fewer than one pair in the entire codebook follows it -- and there is nothing left to count. Press the button; every number below comes from real encryptions.'
+        'Classical differential cryptanalysis needs one high-probability path through the whole cipher. Add rounds and it decays until fewer than one pair in the entire codebook follows it.'
       ),
     ]),
     el('div', { class: 'controls' }, [
-      field('Keys sampled', keySelect, 'each key contributes all 128 pairs'),
+      field('Keys sampled', keySelect),
       el('div', { class: 'field' }, [
         el('span', { class: 'group-label', 'aria-hidden': 'true', text: ' ' }),
         runBtn,
       ]),
     ]),
-    out,
+    runner.announce,
+    runner.meta,
+    runner.out,
   ]);
 
   runBtn.addEventListener('click', () => {
+    if (runner.busy) return;
     void run(currentSbox);
   });
 
-  return { node, run };
+  return {
+    node,
+    run,
+    async reset(sbox: SboxName) {
+      currentSbox = sbox;
+      keySelect.value = DEFAULT_KEYS;
+      await run(sbox);
+    },
+  };
 }

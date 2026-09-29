@@ -27,8 +27,25 @@ import { forwardSet, reachableCiphertextDiffs } from './trails.ts';
 import { layerProbability, switchProbabilityBCT, switchProbabilityTrail, type Table } from './tables.ts';
 
 export const MASTER_KEY_SPACE = 1 << 16;
-/** The rate a random 8-bit permutation returns a boomerang quartet at: 1/(2^n - 1). */
-export const RANDOM_RETURN_RATE = 1 / (BLOCK_SIZE - 1);
+
+/**
+ * The rate a random permutation returns a boomerang quartet at, UNDER THIS
+ * PROCEDURE'S EXCLUSION RULE: 1/(2^n - 3), which is 1/253 for an 8-bit block.
+ *
+ * Not the 1/(2^n - 1) a reader expects, and the difference is the exclusion in
+ * `runBoomerang`. Once the degenerate quartet is thrown away, C3 and C4 are two
+ * DISTINCT ciphertexts neither of which is C1 or C2 -- C3 = C1 is impossible
+ * because delta is nonzero, and C3 = C2 is exactly the case excluded. So P3 and
+ * P4 are two distinct plaintexts outside {P1, P2}: P3 ranges over 254 values and
+ * P4 over the 253 that remain. Exactly one of those 253 is P3 XOR alpha, because
+ * P3 XOR alpha cannot be P1 or P2 either (it would force P3 = P2 or P3 = P1) and
+ * cannot be P3. One success in 253.
+ *
+ * `experiments.test.ts` does not take that argument on trust: it ENUMERATES ALL
+ * 4! and ALL 8! permutations of a 4- and an 8-element block and confirms the
+ * exact rate is 1/(N-3) in both, which fixes the formula rather than the constant.
+ */
+export const RANDOM_RETURN_RATE = 1 / (BLOCK_SIZE - 3);
 
 /**
  * A deterministic 32-bit LCG, used ONLY to choose which master keys an
@@ -56,7 +73,15 @@ function keyStream(count: number, seed: number): () => number {
   return makeKeySampler(seed);
 }
 
-/** A Wilson score interval, which behaves at zero successes where the normal approximation does not. */
+/**
+ * A Wilson score interval, which behaves at zero successes where the normal
+ * approximation does not.
+ *
+ * Correct for INDEPENDENT trials, and that is exactly what a page full of
+ * quartets does not have -- see `clusterInterval`. It is kept because the
+ * impossibility counts in Act 2 really are one-per-pair events and because the
+ * two intervals side by side show how much the independence assumption buys.
+ */
 export function wilsonInterval(successes: number, trials: number, z = 1.959964): [number, number] {
   if (trials === 0) return [0, 1];
   const p = successes / trials;
@@ -64,6 +89,55 @@ export function wilsonInterval(successes: number, trials: number, z = 1.959964):
   const centre = p + (z * z) / (2 * trials);
   const spread = z * Math.sqrt((p * (1 - p)) / trials + (z * z) / (4 * trials * trials));
   return [Math.max(0, (centre - spread) / denom), Math.min(1, (centre + spread) / denom)];
+}
+
+/** One key's contribution to a pooled rate: the cluster the bootstrap resamples. */
+export interface Cluster {
+  readonly successes: number;
+  readonly trials: number;
+}
+
+/**
+ * A cluster bootstrap over KEYS, which is the independent sampling unit here.
+ *
+ * The 128 quartets a key contributes are not independent of each other: they
+ * share one permutation, so a key whose subkeys happen to suit the trail returns
+ * far more often than one that does not. The measured spread is stark -- plenty
+ * of keys return nothing at all in their 128 quartets while others return one in
+ * twenty. Pooling them and applying a Wilson interval treats 65 536 correlated
+ * events as 65 536 independent ones and reports an interval that is too narrow.
+ *
+ * So: resample KEYS with replacement, and for each resample recompute the same
+ * RATIO the page reports -- total successes over total trials, not the mean of
+ * per-key rates, so the interval brackets the estimator actually displayed and
+ * keys that contributed fewer quartets are not silently upweighted.
+ */
+export function clusterInterval(
+  clusters: readonly Cluster[],
+  seed = 0x9e3779b9,
+  resamples = 2000
+): [number, number] {
+  if (clusters.length === 0) return [0, 1];
+  if (clusters.length === 1) {
+    return wilsonInterval(clusters[0].successes, clusters[0].trials);
+  }
+  let s = seed >>> 0 || 1;
+  const rates: number[] = [];
+  for (let b = 0; b < resamples; b++) {
+    let succ = 0;
+    let trials = 0;
+    for (let i = 0; i < clusters.length; i++) {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      const c = clusters[(s >>> 8) % clusters.length];
+      succ += c.successes;
+      trials += c.trials;
+    }
+    rates.push(trials > 0 ? succ / trials : 0);
+  }
+  rates.sort((a, b) => a - b);
+  const lo = rates[Math.floor(resamples * 0.025)];
+  const hi = rates[Math.min(resamples - 1, Math.floor(resamples * 0.975))];
+  return [lo, hi];
 }
 
 // ── Act 1: does one trail survive the rounds? ───────────────────────────────
@@ -98,22 +172,30 @@ export function measureDifferential(
   sbox: Sbox,
   keyCount: number,
   seed: number
-): { hits: number; pairs: number; keysUsed: number } {
+): { hits: number; pairs: number; keysUsed: number; ci: [number, number] } {
   const nextKey = keyStream(keyCount, seed);
   const keys = Math.min(keyCount, MASTER_KEY_SPACE);
   let hits = 0;
   let pairs = 0;
+  // Clustered by key for the same reason the boomerang is: the 128 pairs a key
+  // contributes share its subkeys, so they are not 128 independent trials.
+  const clusters: Cluster[] = [];
   for (let k = 0; k < keys; k++) {
     const key = generateKey(nextKey());
     const book = encryptCodebook(key, sbox, rounds);
+    let h = 0;
+    let n = 0;
     for (let p = 0; p < BLOCK_SIZE; p++) {
       const q = p ^ alpha;
       if (q < p) continue;
-      pairs++;
-      if ((book[p] ^ book[q]) === delta) hits++;
+      n++;
+      if ((book[p] ^ book[q]) === delta) h++;
     }
+    hits += h;
+    pairs += n;
+    clusters.push({ successes: h, trials: n });
   }
-  return { hits, pairs, keysUsed: keys };
+  return { hits, pairs, keysUsed: keys, ci: clusterInterval(clusters, seed ^ 0xd1ff) };
 }
 
 // ── Act 2: a difference that never happens ─────────────────────────────────
@@ -309,9 +391,14 @@ export interface BoomerangResult {
   readonly degenerate: number;
   readonly keysUsed: number;
   readonly rate: number;
+  /** Wilson over the pooled quartets: correct only if quartets were independent. */
+  readonly ciPooled: readonly [number, number];
+  /** Cluster bootstrap over keys: the interval the page reports. */
   readonly ci: readonly [number, number];
   /** Per-key return rates, sorted, for the spread readout. */
   readonly perKeySorted: readonly number[];
+  /** Per-key (returns, quartets), the clusters the bootstrap resamples. */
+  readonly clusters: readonly Cluster[];
 }
 
 /**
@@ -348,6 +435,7 @@ export function runBoomerang(
   let quartets = 0;
   let degenerate = 0;
   const perKey: number[] = [];
+  const clusters: Cluster[] = [];
   for (let k = 0; k < keys; k++) {
     const key = generateKey(nextKey());
     const book = encryptCodebook(key, sbox, rounds);
@@ -369,6 +457,7 @@ export function runBoomerang(
     quartets += n;
     returned += r;
     perKey.push(n > 0 ? r / n : 0);
+    clusters.push({ successes: r, trials: n });
   }
   perKey.sort((a, b) => a - b);
   return {
@@ -380,8 +469,10 @@ export function runBoomerang(
     degenerate,
     keysUsed: keys,
     rate: quartets > 0 ? returned / quartets : 0,
-    ci: wilsonInterval(returned, quartets),
+    ciPooled: wilsonInterval(returned, quartets),
+    ci: clusterInterval(clusters, seed ^ 0xb003),
     perKeySorted: perKey,
+    clusters,
   };
 }
 
@@ -405,6 +496,7 @@ export function runBoomerangNull(
   let quartets = 0;
   let degenerate = 0;
   const perKey: number[] = [];
+  const clusters: Cluster[] = [];
   for (let k = 0; k < permutationCount; k++) {
     const book = new Uint8Array(BLOCK_SIZE);
     for (let i = 0; i < BLOCK_SIZE; i++) book[i] = i;
@@ -432,6 +524,7 @@ export function runBoomerangNull(
     quartets += n;
     returned += r;
     perKey.push(n > 0 ? r / n : 0);
+    clusters.push({ successes: r, trials: n });
   }
   perKey.sort((a, b) => a - b);
   return {
@@ -443,8 +536,10 @@ export function runBoomerangNull(
     degenerate,
     keysUsed: permutationCount,
     rate: quartets > 0 ? returned / quartets : 0,
-    ci: wilsonInterval(returned, quartets),
+    ciPooled: wilsonInterval(returned, quartets),
+    ci: clusterInterval(clusters, seed ^ 0x17e12),
     perKeySorted: perKey,
+    clusters,
   };
 }
 

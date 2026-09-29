@@ -118,11 +118,19 @@ function tablesOf(sbox: SboxName): ReturnType<typeof roundTables> {
   return t;
 }
 
-export function caseNumbers(c: SwitchCase, sboxName: SboxName): CaseNumbers {
+/**
+ * The numbers for a case, optionally with the switch moved to a different round.
+ *
+ * Moving it is the brief's split-point control, and it is genuinely informative:
+ * the same two middle differences cost different amounts depending on how many
+ * substitution layers sit on each side of them, and at some positions one half
+ * has no trail at all -- which the page then says, rather than printing a zero.
+ */
+export function caseNumbers(c: SwitchCase, sboxName: SboxName, switchRound = c.switchRound): CaseNumbers {
   const { ddt, bct } = tablesFor(getSbox(sboxName));
   const all = tablesOf(sboxName);
-  const e0Layers = c.switchRound - 1;
-  const e1Layers = c.rounds - c.switchRound;
+  const e0Layers = switchRound - 1;
+  const e1Layers = c.rounds - switchRound;
   const beforeSwitch = permuteInverse(c.beta);
   const afterSwitch = permute(c.gamma);
   const p =
