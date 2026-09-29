@@ -26,6 +26,7 @@ import {
   field,
   hex16,
   hex8,
+  markRun,
   num,
   scrollRegion,
   stat,
@@ -69,7 +70,7 @@ export function sievePanel(): SievePanel {
     document.createTextNode('New random key'),
   ]);
 
-  const out = el('div', { id: 'sieve-out', role: 'status', 'aria-live': 'polite' }, [
+  const out = el('div', { id: 'sieve-out', role: 'status', 'aria-live': 'polite', 'data-run': '0' }, [
     el('p', { class: 'field-hint', text: 'Sieving...' }),
   ]);
 
@@ -85,6 +86,7 @@ export function sievePanel(): SievePanel {
       out.append(
         verdict('fail', `NOT RUN — ${FAILURE_CODES.RANGE}`, FAILURE_TEXT.E_RANGE, 'sieve-failure')
       );
+      markRun(out);
       return;
     }
     key = generateKey(parseInt(raw, 16));
@@ -222,6 +224,7 @@ export function sievePanel(): SievePanel {
         ]),
       ])
     );
+    markRun(out);
   }
 
   const node = el('section', { class: 'card', 'aria-labelledby': 'act3-title', id: 'act3' }, [

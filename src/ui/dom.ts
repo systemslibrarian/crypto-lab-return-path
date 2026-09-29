@@ -174,3 +174,21 @@ export function field(
 export function scrollRegion(label: string, cls: string, children: Node[]): HTMLElement {
   return el('div', { class: cls, role: 'region', tabindex: '0', 'aria-label': label }, children);
 }
+
+/**
+ * Stamp a monotonically increasing run number on a panel's output container.
+ *
+ * Every panel here is filled asynchronously, and the obvious completion signal --
+ * "this panel now holds two verdicts" -- is satisfied by the PREVIOUS render, so a
+ * test that waits on it can read one stale state repeatedly and conclude a branch
+ * is unreachable. That is not hypothetical: it made the accessibility gate's
+ * ambiguous-sieve step flaky before this existed.
+ *
+ * `data-run` changes exactly once per completed render, so waiting for it to
+ * change is waiting for THIS run rather than for a condition that was already
+ * true. The gate and the claims suite both read it.
+ */
+export function markRun(node: HTMLElement): void {
+  const current = Number(node.getAttribute('data-run') ?? '0');
+  node.setAttribute('data-run', String(current + 1));
+}

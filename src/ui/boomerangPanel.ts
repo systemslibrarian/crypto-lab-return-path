@@ -22,6 +22,7 @@ import {
   el,
   field,
   hex8,
+  markRun,
   num,
   oneInLabel,
   pctLabel,
@@ -75,7 +76,7 @@ export function boomerangPanel(): BoomerangPanel {
     document.createTextNode('Throw the boomerang'),
   ]);
 
-  const out = el('div', { id: 'boom-out', role: 'status', 'aria-live': 'polite' }, [
+  const out = el('div', { id: 'boom-out', role: 'status', 'aria-live': 'polite', 'data-run': '0' }, [
     el('p', { class: 'field-hint', text: 'Measuring...' }),
   ]);
   const recipe = el('div', { id: 'boom-recipe' });
@@ -244,6 +245,7 @@ export function boomerangPanel(): BoomerangPanel {
         ]),
       ])
     );
+    markRun(out);
   }
 
   const node = el('section', { class: 'card', 'aria-labelledby': 'act4-title', id: 'act4' }, [

@@ -38,6 +38,7 @@ import {
   hex16,
   hex4,
   hex8,
+  markRun,
   num,
   probLabel,
   scrollRegion,
@@ -143,10 +144,10 @@ export function switchPanel(): SwitchPanel {
   ]);
 
   const quartetOut = el('div', { id: 'quartet-out' });
-  const stepsOut = el('div', { id: 'walk-out', role: 'status', 'aria-live': 'polite' }, [
+  const stepsOut = el('div', { id: 'walk-out', role: 'status', 'aria-live': 'polite', 'data-run': '0' }, [
     el('p', { class: 'field-hint', text: 'Finding a quartet...' }),
   ]);
-  const measureOut = el('div', { id: 'switch-out' });
+  const measureOut = el('div', { id: 'switch-out', 'data-run': '0' });
 
   let currentSbox: SboxName = 'weak';
   let currentCase: SwitchCase = SWITCH_CASES[0];
@@ -198,6 +199,7 @@ export function switchPanel(): SwitchPanel {
         )
       );
     }
+    markRun(stepsOut);
   }
 
   function renderQuartet(): void {
@@ -367,6 +369,7 @@ export function switchPanel(): SwitchPanel {
         ]),
       ])
     );
+    markRun(measureOut);
   }
 
   async function run(sbox: SboxName): Promise<void> {
@@ -407,6 +410,7 @@ export function switchPanel(): SwitchPanel {
           'walk-verdict'
         )
       );
+      markRun(stepsOut);
     } else {
       stepBtn.disabled = false;
       resetBtn.disabled = false;

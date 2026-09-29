@@ -20,15 +20,16 @@ import { MAX_ROUNDS, PAIRS_PER_CODEBOOK } from '../crypto/spn.ts';
 import { legend, lineChart } from './chart.ts';
 import {
   clear,
+  disclosure,
   el,
+  field,
   hex8,
   log2Label,
+  markRun,
   num,
   scrollRegion,
   stat,
   verdict,
-  disclosure,
-  field,
 } from './dom.ts';
 
 export interface DecayPanel {
@@ -82,7 +83,7 @@ function rowsTable(rows: readonly DecayRow[]): HTMLElement {
 }
 
 export function decayPanel(): DecayPanel {
-  const out = el('div', { id: 'decay-out', role: 'status', 'aria-live': 'polite' }, [
+  const out = el('div', { id: 'decay-out', role: 'status', 'aria-live': 'polite', 'data-run': '0' }, [
     el('p', { class: 'field-hint', text: 'Measuring...' }),
   ]);
 
@@ -236,6 +237,7 @@ export function decayPanel(): DecayPanel {
         ]),
       ])
     );
+    markRun(out);
   }
 
   const node = el('section', { class: 'card', 'aria-labelledby': 'act1-title', id: 'act1' }, [

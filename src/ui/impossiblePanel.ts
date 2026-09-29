@@ -30,6 +30,7 @@ import {
   el,
   field,
   hex8,
+  markRun,
   num,
   parseByte,
   scrollRegion,
@@ -141,7 +142,7 @@ export function impossiblePanel(): ImpossiblePanel {
     document.createTextNode('Try to make it happen'),
   ]);
 
-  const out = el('div', { id: 'imp-out', role: 'status', 'aria-live': 'polite' }, [
+  const out = el('div', { id: 'imp-out', role: 'status', 'aria-live': 'polite', 'data-run': '0' }, [
     el('p', { class: 'field-hint', text: 'Measuring...' }),
   ]);
 
@@ -184,6 +185,7 @@ export function impossiblePanel(): ImpossiblePanel {
         'imp-retired'
       )
     );
+    markRun(out);
   }
 
   function fail(code: string): void {
@@ -192,6 +194,7 @@ export function impossiblePanel(): ImpossiblePanel {
     out.append(
       verdict('fail', `NOT RUN — ${code}`, FAILURE_TEXT[code as keyof typeof FAILURE_TEXT], 'imp-failure')
     );
+    markRun(out);
   }
 
   async function run(sbox: SboxName): Promise<void> {
@@ -352,6 +355,7 @@ export function impossiblePanel(): ImpossiblePanel {
         ]),
       ])
     );
+    markRun(out);
   }
 
   const node = el('section', { class: 'card', 'aria-labelledby': 'act2-title', id: 'act2' }, [

@@ -708,9 +708,25 @@ export async function scan(page: Page, label: string): Promise<void> {
 
 // ── The drive ───────────────────────────────────────────────────────────────
 
-/** Wait for a panel to finish a Worker round trip, proven by its verdict count. */
-async function awaitVerdicts(page: Page, panel: string, count: number): Promise<void> {
-  await expect(page.locator(`${panel} .verdict`)).toHaveCount(count);
+/**
+ * Wait for a panel to finish THIS Worker round trip.
+ *
+ * Not for a verdict count: every panel renders asynchronously, so "holds two
+ * verdicts" is satisfied by the PREVIOUS render and a wait on it can return
+ * immediately against a stale state. That is not a theoretical risk -- it made the
+ * ambiguous-sieve step of this drive flake, reading one unchanged state thirty
+ * times and concluding the branch was unreachable.
+ *
+ * Each panel stamps `data-run` once per completed render (see `markRun` in
+ * `src/ui/dom.ts`), so waiting for that number to CHANGE is waiting for the run
+ * just triggered. Read the value before the action, pass it here after.
+ */
+async function runId(page: Page, panel: string): Promise<string> {
+  return (await page.locator(panel).getAttribute('data-run')) ?? '0';
+}
+
+async function awaitRerender(page: Page, panel: string, before: string): Promise<void> {
+  await expect(page.locator(panel)).not.toHaveAttribute('data-run', before);
 }
 
 /**
@@ -781,13 +797,15 @@ export async function driveAllStates(page: Page, theme: string): Promise<void> {
     ['control', 'DDT equals BCT, only the double charge'],
     ['incompatible', 'the round trip never closes'],
   ] as [string, string][]) {
+    const switchBefore = await runId(page, '#switch-out');
+    const boomBefore = await runId(page, '#boom-out');
     await page.locator(`.seg-btn[data-case="${caseId}"]`).click();
     await expect(page.locator(`.seg-btn[data-case="${caseId}"]`)).toHaveAttribute(
       'aria-pressed',
       'true'
     );
-    await expect(page.locator('#switch-out .verdict')).not.toHaveCount(0);
-    await awaitVerdicts(page, '#boom-out', 2);
+    await awaitRerender(page, '#switch-out', switchBefore);
+    await awaitRerender(page, '#boom-out', boomBefore);
     await scanAt(`Act 5 case: ${label}`);
     if (caseId === 'incompatible') {
       await expect(page.locator('#switch-out .switch-incompatible .verdict-label')).toContainText(
@@ -801,9 +819,10 @@ export async function driveAllStates(page: Page, theme: string): Promise<void> {
   }
   // Hover persists on the control just clicked, and a pressed .seg-btn repaints
   // its accent fill and its border on hover.
+  const ladderBoomBefore = await runId(page, '#boom-out');
   await page.locator('.seg-btn[data-case="ladder"]').click();
   await expect(page.locator('.seg-btn[data-case="ladder"]')).toHaveAttribute('aria-pressed', 'true');
-  await awaitVerdicts(page, '#boom-out', 2);
+  await awaitRerender(page, '#boom-out', ladderBoomBefore);
   await scanAt('Act 5: back on the ladder case, the pressed toggle hovered');
 
   // ── Act 5: both 16x16 tables, opened through their summary ──────────────
@@ -860,19 +879,21 @@ export async function driveAllStates(page: Page, theme: string): Promise<void> {
   // difference offers only 128 pairs, so some keys leave more than one candidate
   // standing. The page reports an ambiguous survivor set rather than guessing,
   // and that verdict is a different tone with a different border.
+  //
+  // REACHED DETERMINISTICLY, with a named key, and both halves of that matter.
+  // 17 380 of the 65 536 keys are ambiguous here at the panel's fixed seed, so
+  // clicking "New random key" until one turns up looks reliable and is not: the
+  // wait after each click was `#sieve-out .verdict` reaching two, which the
+  // PREVIOUS render already satisfies, so the loop could read one stale state
+  // thirty times and conclude the branch was unreachable. Naming a key removes
+  // both the flake and the race, and the wait below is on the ambiguous verdict
+  // itself rather than on a count that was already true.
   await page.locator('#sieve-alphas').selectOption('1');
-  let ambiguous = false;
-  for (let attempt = 0; attempt < 30 && !ambiguous; attempt++) {
-    await page.locator('#sieve-random').click();
-    await awaitVerdicts(page, '#sieve-out', 2);
-    ambiguous = (await page.locator('#sieve-out .sieve-verdict.verdict-alarm').count()) > 0;
-  }
-  expect(ambiguous, 'the weakest sieve must reach its ambiguous state within 30 random keys').toBe(
-    true
-  );
-  await expect(page.locator('#sieve-out .sieve-verdict .verdict-label')).toContainText(
-    'E_SIEVE_AMBIGUOUS'
-  );
+  await page.locator('#sieve-key').fill('0x007c');
+  await page.locator('#sieve-run').click();
+  await expect(
+    page.locator('#sieve-out .sieve-verdict.verdict-alarm .verdict-label')
+  ).toContainText('E_SIEVE_AMBIGUOUS');
   await scanAt('Act 3: the sieve ran out of pairs with several candidates standing');
 
   // A malformed master key: the refusal path.
@@ -896,14 +917,16 @@ export async function driveAllStates(page: Page, theme: string): Promise<void> {
   await scanAt('Act 3: the cost disclosure open');
 
   // ── Act 1 and Act 4 at larger sample sizes ──────────────────────────────
+  const decayBefore = await runId(page, '#decay-out');
   await page.locator('#decay-keys').selectOption('2048');
   await page.locator('#decay-run').click();
-  await awaitVerdicts(page, '#decay-out', 2);
+  await awaitRerender(page, '#decay-out', decayBefore);
   await scanAt('Act 1: measured over 2048 keys, the primary button hovered');
 
+  const boom3000Before = await runId(page, '#boom-out');
   await page.locator('#boom-keys').selectOption('3000');
   await page.locator('#boom-run').click();
-  await awaitVerdicts(page, '#boom-out', 2);
+  await awaitRerender(page, '#boom-out', boom3000Before);
   await scanAt('Act 4: 3000 keys, the primary button hovered');
 
   await page.locator('#act4 details > summary').first().click();
@@ -930,13 +953,17 @@ export async function driveAllStates(page: Page, theme: string): Promise<void> {
   // The PRESENT table changes every number on the page, and its switch cases
   // land on different table cells. Scanned with all the disclosures still open,
   // which is the widest rendering this page has.
+  const sboxDecayBefore = await runId(page, '#decay-out');
+  const sboxBoomBefore = await runId(page, '#boom-out');
+  const sboxSwitchBefore = await runId(page, '#switch-out');
   await page.locator('#global-sbox').selectOption('strong');
-  await awaitVerdicts(page, '#decay-out', 2);
-  await awaitVerdicts(page, '#boom-out', 2);
-  await expect(page.locator('#switch-out .verdict')).not.toHaveCount(0);
+  await awaitRerender(page, '#decay-out', sboxDecayBefore);
+  await awaitRerender(page, '#boom-out', sboxBoomBefore);
+  await awaitRerender(page, '#switch-out', sboxSwitchBefore);
   await scanAt('the PRESENT S-box, every panel rerun, disclosures open');
 
+  const backDecayBefore = await runId(page, '#decay-out');
   await page.locator('#global-sbox').selectOption('weak');
-  await awaitVerdicts(page, '#decay-out', 2);
+  await awaitRerender(page, '#decay-out', backDecayBefore);
   await scanAt('back on the textbook S-box');
 }

@@ -106,12 +106,21 @@ function numbersIn(s: string): number[] {
 async function boot(page: Page): Promise<void> {
   page.setDefaultTimeout(30_000);
   await page.goto('.');
-  // Every panel is filled from a Worker; wait on verdicts, never a timeout.
-  await expect(page.locator('#decay-out .verdict')).toHaveCount(2);
-  await expect(page.locator('#imp-out .verdict')).toHaveCount(1);
-  await expect(page.locator('#sieve-out .verdict')).toHaveCount(2);
-  await expect(page.locator('#boom-out .verdict')).toHaveCount(2);
-  await expect(page.locator('#switch-out .verdict')).toHaveCount(1);
+  // Every panel is filled from a Worker; wait on the `data-run` stamp each panel
+  // sets once per completed render, never on a timeout and never on a verdict
+  // count a previous render could already satisfy.
+  for (const panel of ['#decay-out', '#imp-out', '#sieve-out', '#boom-out', '#switch-out', '#walk-out']) {
+    await expect(page.locator(panel)).not.toHaveAttribute('data-run', '0');
+  }
+}
+
+/** The run stamp a panel currently carries, for a before/after wait. */
+async function runId(page: Page, panel: string): Promise<string> {
+  return (await page.locator(panel).getAttribute('data-run')) ?? '0';
+}
+
+async function awaitRerender(page: Page, panel: string, before: string): Promise<void> {
+  await expect(page.locator(panel)).not.toHaveAttribute('data-run', before);
 }
 
 // ── The headline claim ─────────────────────────────────────────────────────
@@ -394,8 +403,10 @@ test('Act 2: a differential that IS possible is reported as possible, with a cou
   page,
 }) => {
   await boot(page);
+  const before = await runId(page, '#imp-out');
   await page.locator('#imp-delta').fill('0x11');
   await page.locator('#imp-run').click();
+  await awaitRerender(page, '#imp-out', before);
   const v = page.locator('#imp-out .imp-verdict');
   await expect(v.locator('.verdict-label')).toContainText('POSSIBLE');
   // The count it reports must be nonzero, and must match the tile beside it.
@@ -498,15 +509,17 @@ test('Act 3 FAILURE PATH: the weakest sieve reports running out of data, not a g
   page,
 }) => {
   await boot(page);
+  // A NAMED key, not a retry loop. 17 380 of the 65 536 keys leave more than one
+  // candidate standing here at the panel's fixed seed, so a loop over random keys
+  // would usually work -- but its wait was a verdict COUNT the previous render
+  // already satisfied, which makes it a race that reads one stale state
+  // repeatedly and then reports the branch unreachable.
   await page.locator('#sieve-alphas').selectOption('1');
-  let found = false;
-  for (let i = 0; i < 40 && !found; i++) {
-    await page.locator('#sieve-random').click();
-    await expect(page.locator('#sieve-out .verdict')).toHaveCount(2);
-    found = (await page.locator('#sieve-out .sieve-verdict.verdict-alarm').count()) > 0;
-  }
-  expect(found, 'the single-difference sieve must be able to run out of pairs').toBe(true);
-  const v = page.locator('#sieve-out .sieve-verdict');
+  const sieveBefore = await runId(page, '#sieve-out');
+  await page.locator('#sieve-key').fill('0x007c');
+  await page.locator('#sieve-run').click();
+  await awaitRerender(page, '#sieve-out', sieveBefore);
+  const v = page.locator('#sieve-out .sieve-verdict.verdict-alarm');
   await expect(v.locator('.verdict-label')).toContainText('E_SIEVE_AMBIGUOUS');
   // It ran out of DATA; the method did not fail, and the page must say which.
   await expect(v.locator('.verdict-note')).toContainText('the data ran out, not the method');
@@ -629,7 +642,11 @@ test('Act 5 FAILURE PATH: the incompatible switch refuses, and the walk says why
   page,
 }) => {
   await boot(page);
+  const swBefore = await runId(page, '#switch-out');
+  const walkBefore = await runId(page, '#walk-out');
   await page.locator('.seg-btn[data-case="incompatible"]').click();
+  await awaitRerender(page, '#switch-out', swBefore);
+  await awaitRerender(page, '#walk-out', walkBefore);
   await expect(page.locator('#switch-out .switch-incompatible')).toHaveCount(1);
   await expect(page.locator('#switch-out .switch-incompatible .verdict-label')).toContainText(
     'E_SWITCH_INCOMPATIBLE'
@@ -812,8 +829,10 @@ test('NEG-2: a unique recovery says on screen that the master key is still secre
   page,
 }) => {
   await boot(page);
+  const neg2Before = await runId(page, '#sieve-out');
   await page.locator('#sieve-key').fill('0xabcd');
   await page.locator('#sieve-run').click();
+  await awaitRerender(page, '#sieve-out', neg2Before);
   const v = page.locator('#sieve-out .sieve-verdict.verdict-pass');
   await expect(v).toHaveCount(1);
   await expect(v.locator('.verdict-label')).toContainText(
