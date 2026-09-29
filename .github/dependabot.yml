@@ -1,0 +1,27 @@
+# Grouped, so this lab opens ONE pull request a week for minor and patch bumps
+# instead of one per dependency. Ungrouped, this fleet reached 1,461 open pull
+# requests across 176 repos, none of which had any CI signal because the only
+# workflow fired on push to main.
+#
+# Majors are deliberately NOT grouped. When the 2026-08-18 backlog was landed,
+# 109 bumps had to be held back and they were overwhelmingly majors: one
+# breaking major inside a grouped pull request makes the whole thing
+# unmergeable, which is exactly the hand-unpicking the grouping exists to
+# prevent.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns: ["*"]
