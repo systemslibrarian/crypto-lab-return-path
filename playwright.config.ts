@@ -18,7 +18,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? 'list' : [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:4677/crypto-lab-return-path/',
+    baseURL: 'http://localhost:4718/crypto-lab-return-path/',
     colorScheme: 'dark', // dark is the only theme
   },
   projects: [
@@ -37,8 +37,8 @@ export default defineConfig({
     // Build before serving: `vite preview` only serves whatever is already in
     // dist/, so without this a failing build leaves the previous good bundle in
     // place and the suite passes green against code that no longer compiles.
-    command: 'npm run build && npm run preview -- --port 4677 --strictPort',
-    url: 'http://localhost:4677/crypto-lab-return-path/',
+    command: 'npm run build && npm run preview -- --port 4718 --strictPort',
+    url: 'http://localhost:4718/crypto-lab-return-path/',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
