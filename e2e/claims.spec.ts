@@ -958,10 +958,29 @@ test('twenty rapid S-box toggles never leave one table’s numbers under the oth
     await select.selectOption(i % 2 === 0 ? 'strong' : 'weak');
   }
   // Land on a known one and wait for the page to settle completely.
+  //
+  // SETTLING MEANS DRAINING THE QUEUE, which is why these three need a timeout
+  // and the rest of the suite does not. Latest-request-wins drops a stale
+  // ANSWER, it does not cancel the job that produces it, so after 21 selections
+  // the worker still has 21 decay measurements to run and the newest ticket --
+  // the only one allowed to clear `aria-busy` -- is the last of them.
+  //
+  // Measured on 2026-10-15 immediately after the final selectOption:
+  // #switch-out 1 ms, #decay-out 2291 ms, #boom-out 2294 ms. Playwright's
+  // default expect timeout is 5000 ms, which left no room on a throttled
+  // runner: CI failed here on both the first attempt and the retry with
+  // #decay-out resolving busy 14 times across the full 5 s, while the same
+  // commit passed locally in 5.2 s.
+  //
+  // 60 s is a HANG DETECTOR, not an estimate of how long settling takes. A
+  // genuine leak -- a stale job that returns without settling its ticket, the
+  // bug `Latest` exists to prevent -- never clears, so it still fails here, and
+  // well inside the 300 s test timeout. Do not read it as a duration.
+  const settled = { timeout: 60_000 };
   await select.selectOption('strong');
-  await expect(page.locator('#switch-out')).not.toHaveAttribute('aria-busy', 'true');
-  await expect(page.locator('#decay-out')).not.toHaveAttribute('aria-busy', 'true');
-  await expect(page.locator('#boom-out')).not.toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#switch-out')).not.toHaveAttribute('aria-busy', 'true', settled);
+  await expect(page.locator('#decay-out')).not.toHaveAttribute('aria-busy', 'true', settled);
+  await expect(page.locator('#boom-out')).not.toHaveAttribute('aria-busy', 'true', settled);
 
   // RE-DERIVATION against the S-box the page is NOW printing.
   const sbox = await readSboxFromPage(page);
