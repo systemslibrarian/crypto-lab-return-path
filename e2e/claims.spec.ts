@@ -1006,6 +1006,62 @@ test('twenty rapid S-box toggles never leave one table’s numbers under the oth
   expect(teaserCells[1]).toBe(`${bct[bh][gh]}/16 and ${bct[bl][gl]}/16`);
 });
 
+test('Act 5 drops an older quartet response even when both cases use the same split', async ({
+  page,
+}) => {
+  // Delay only the Control case's quartet request. The next Ladder request uses
+  // the same split (round 2), completes first, and must remain on screen after
+  // the older response finally arrives. This deterministically exercises the
+  // out-of-order completion that a normal Worker usually hides by answering in
+  // submission order.
+  await page.addInitScript(() => {
+    const NativeWorker = globalThis.Worker;
+    const ReorderingWorker = new Proxy(NativeWorker, {
+      construct(Target, args) {
+        const worker = Reflect.construct(Target, args) as Worker;
+        const nativePost = worker.postMessage.bind(worker);
+        let delayedId: number | undefined;
+        worker.addEventListener('message', (event: MessageEvent<{ id?: number }>) => {
+          if (event.data.id === delayedId) {
+            document.documentElement.dataset.delayedQuartetSettled = 'true';
+          }
+        });
+        worker.postMessage = ((message: unknown) => {
+          const envelope = message as {
+            id?: number;
+            req?: { kind?: string; alpha?: number };
+          };
+          if (envelope.req?.kind === 'quartet' && envelope.req.alpha === 0xb0) {
+            delayedId = envelope.id;
+            window.setTimeout(() => nativePost(message), 500);
+            return;
+          }
+          nativePost(message);
+        }) as typeof worker.postMessage;
+        return worker;
+      },
+    });
+    Object.defineProperty(globalThis, 'Worker', {
+      configurable: true,
+      writable: true,
+      value: ReorderingWorker,
+    });
+  });
+
+  await boot(page);
+  await page.locator('.seg-btn[data-case="control"]').click();
+  await page.locator('.seg-btn[data-case="ladder"]').click();
+  await expect(page.locator('.seg-btn[aria-pressed="true"]')).toHaveAttribute('data-case', 'ladder');
+  await page.waitForFunction(
+    () => document.documentElement.dataset.delayedQuartetSettled === 'true'
+  );
+  await expect(page.locator('#switch-out')).not.toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#walk-out')).not.toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#walk-out .step-line[data-step="1"] .corner-role')).toHaveText(
+    'alpha = 0x0b'
+  );
+});
+
 test('a panel is marked busy while it runs and settles afterwards', async ({ page }) => {
   await boot(page);
   // `aria-busy` is what tells a screen reader to hold its announcement rather
