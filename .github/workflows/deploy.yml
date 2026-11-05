@@ -19,8 +19,6 @@ concurrency:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
   build:
@@ -28,11 +26,15 @@ jobs:
     # GitHub's default is 360 minutes. This job runs in a few minutes; 20 is
     # generous and turns a hung run into a failure instead of a six-hour stall.
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          node-version: 22
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
           cache: npm
       - run: npm ci
 
@@ -42,6 +44,11 @@ jobs:
       # build whose cryptography was broken so long as the browser specs passed.
       - name: Unit and correctness suite (Vitest)
         run: npm test
+
+      - name: Stamp the artifact with its exact source revision
+        run: |
+          mkdir -p public
+          printf '{"source_sha":"%s","repository":"%s"}\n' "$GITHUB_SHA" "$GITHUB_REPOSITORY" > public/deployment.json
 
       - name: Build
         run: npm run build
@@ -58,8 +65,8 @@ jobs:
       - name: Claims suite (does the page tell the truth)
         run: npm run test:claims
 
-      - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        if: github.event_name != 'pull_request'
         with:
           path: dist
 
@@ -70,13 +77,34 @@ jobs:
     # build, pass the gate, and skip this job, so the site would never update.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
+      - name: Verify served Pages bytes match the deployed revision
+        env:
+          LIVE_URL: https://systemslibrarian.github.io/crypto-lab-return-path/
+        run: |
+          set -eu
+          for attempt in $(seq 1 18); do
+            result=$(curl -fsSL --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "${LIVE_URL}deployment.json?sha=${GITHUB_SHA}" 2>/dev/null || true)
+            if node -e 'try { const p=JSON.parse(process.argv[1]);process.exit(p.source_sha===process.argv[2]&&p.repository===process.argv[3]?0:1) } catch { process.exit(1) }' "$result" "$GITHUB_SHA" "$GITHUB_REPOSITORY"; then
+              html=$(curl -fsSL --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "${LIVE_URL}?sha=${GITHUB_SHA}" 2>/dev/null || true)
+              if printf '%s' "$html" | grep -Fq 'id="app"'; then
+                echo "Verified live HTML and source revision $GITHUB_SHA at $LIVE_URL"
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "::error::Live Pages failed source-SHA/HTML verification"
+          exit 1
 
   dependabot-auto-merge:
     # Every gate job. This is the whole safety argument: the gate decides, not
@@ -95,15 +123,22 @@ jobs:
       # hides it.
       actions: write
     steps:
-      - id: meta
-        uses: dependabot/fetch-metadata@v3
       - name: Merge any bump whose gate went green
         run: |
+          set -eu
+          merged=""
           for attempt in 1 2 3; do
-            gh pr merge --squash --delete-branch "$PR_URL" && merged=1 && break
-            sleep 15          # a sibling PR merging first moves main under us
+            if gh pr merge --squash --delete-branch "$PR_URL"; then
+              merged=1
+              break
+            fi
+            echo "merge attempt $attempt failed; base branch may have moved - retrying"
+            sleep 15
           done
-          [ -n "$merged" ] || { echo "::warning::gate passed, merge did not land"; exit 0; }
+          if [ -z "$merged" ]; then
+            echo "::error::gate passed but the merge did not land after 3 attempts; the bump is unmerged and no deploy was dispatched"
+            exit 1
+          fi
           # A merge made with GITHUB_TOKEN raises no push event -- GitHub suppresses
           # them so workflows cannot retrigger themselves -- so deploy would never run
           # and the site would keep serving the previous build. Ask for it explicitly;

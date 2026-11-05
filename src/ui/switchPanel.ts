@@ -262,13 +262,15 @@ export function switchPanel(): SwitchPanel {
     markRun(stepsOut);
   }
 
-  function renderMeasurement(): string {
+  function renderMeasurement(c: SwitchCase, sboxName: SboxName, sr: number): string {
     const out = runner.out;
-    const sbox = getSbox(currentSbox);
+    const sbox = getSbox(sboxName);
     const { ddt, bct } = tablesFor(sbox);
-    const rows: SwitchMeasurement[] = SWITCH_CASES.map((c) => measureSwitch(c.beta, c.gamma, sbox, ddt, bct));
-    const mine = measureSwitch(currentCase.beta, currentCase.gamma, sbox, ddt, bct);
-    const n = caseNumbers(currentCase, currentSbox, switchRound());
+    const rows: SwitchMeasurement[] = SWITCH_CASES.map((candidate) =>
+      measureSwitch(candidate.beta, candidate.gamma, sbox, ddt, bct)
+    );
+    const mine = measureSwitch(c.beta, c.gamma, sbox, ddt, bct);
+    const n = caseNumbers(c, sboxName, sr);
 
     out.append(
       verdict(
@@ -314,7 +316,7 @@ export function switchPanel(): SwitchPanel {
       el('div', { class: 'readout' }, [
         stat(
           'split point',
-          `round ${switchRound()}`,
+          `round ${sr}`,
           `${n.e0Layers} layer${n.e0Layers === 1 ? '' : 's'} before, ${n.e1Layers} after`
         ),
         stat('p (first half)', n.p > 0 ? n.p.toFixed(4) : 'no trail', n.e0Layers === 0 ? 'empty half' : `alpha → beta`),
@@ -332,7 +334,7 @@ export function switchPanel(): SwitchPanel {
         verdict(
           'info',
           `NO TRAIL AT THIS SPLIT — ${FAILURE_CODES.NO_TRAIL}`,
-          `${FAILURE_TEXT.E_NO_TRAIL} Moving the switch to round ${switchRound()} leaves ${n.p === 0 ? 'the first' : 'the second'} half with no path between the differences this case names. The page reports that rather than printing a probability of zero as if it were a measurement.`,
+          `${FAILURE_TEXT.E_NO_TRAIL} Moving the switch to round ${sr} leaves ${n.p === 0 ? 'the first' : 'the second'} half with no path between the differences this case names. The page reports that rather than printing a probability of zero as if it were a measurement.`,
           'switch-notrail'
         )
       );
@@ -381,10 +383,10 @@ export function switchPanel(): SwitchPanel {
       ])
     );
 
-    const bh = (currentCase.beta >> 4) & 0xf;
-    const bl = currentCase.beta & 0xf;
-    const gh = (currentCase.gamma >> 4) & 0xf;
-    const gl = currentCase.gamma & 0xf;
+    const bh = (c.beta >> 4) & 0xf;
+    const bl = c.beta & 0xf;
+    const gh = (c.gamma >> 4) & 0xf;
+    const gl = c.gamma & 0xf;
     out.append(
       disclosure('Inspect the evidence: the two tables, with this switch’s cells marked', [
         el('p', { class: 'scroll-note', text: 'Both tables are 16 columns wide and scroll sideways on a narrow screen.' }),
@@ -424,39 +426,7 @@ export function switchPanel(): SwitchPanel {
     return `Switch measured: ${mine.closed} of ${mine.states} middle states close the round trip, ${mine.matchesBct ? 'exactly as the round-trip table predicts' : 'which the round-trip table did not predict'}.`;
   }
 
-  async function run(sbox: SboxName): Promise<void> {
-    currentSbox = sbox;
-    const c = currentCase;
-    const sr = switchRound();
-    clear(stepsOut);
-    stepsOut.append(el('p', { class: 'field-hint', text: 'Searching for a quartet that follows this trail…' }));
-    setBusy(stepsOut, true);
-    stepBtn.disabled = true;
-    resetBtn.disabled = true;
-
-    const measurementDone = runner.run(
-      { caseId: c.id, switchRound: String(sr), sbox },
-      'Measuring the switch over all 256 middle states…',
-      async () => null,
-      () => renderMeasurement()
-    );
-
-    const result = (await compute({
-      kind: 'quartet',
-      sbox,
-      alpha: c.alpha,
-      beta: c.beta,
-      gamma: c.gamma,
-      delta: c.delta,
-      rounds: c.rounds,
-      switchRound: sr,
-      startKey: 0x0000,
-      limit: MASTER_KEY_SPACE,
-    })) as QuartetOutcome;
-
-    // Only paint the walk if this is still the newest request: the measurement
-    // and the walk are driven together and must never disagree about the case.
-    if (runner.currentId !== 0 && String(sr) !== splitSelect.value) return;
+  function renderWalk(result: QuartetOutcome, c: SwitchCase, sbox: SboxName, sr: number): void {
     walk = result.walk;
     steps = walk.found ? walkSteps(c, walk, caseNumbers(c, sbox, sr)) : [];
     shown = walk.found ? 1 : 0;
@@ -495,7 +465,52 @@ export function switchPanel(): SwitchPanel {
       renderSteps();
     }
     renderSquare();
-    await measurementDone;
+  }
+
+  async function run(sbox: SboxName): Promise<void> {
+    currentSbox = sbox;
+    const c = currentCase;
+    const sr = switchRound();
+
+    // Retire the old quartet immediately. Leaving its square visible while a
+    // new case or S-box is running pairs old evidence with current controls.
+    walk = null;
+    steps = [];
+    shown = 0;
+    renderSquare();
+    clear(stepsOut);
+    stepsOut.append(el('p', { class: 'field-hint', text: 'Searching for a quartet that follows this trail…' }));
+    setBusy(stepsOut, true);
+    stepBtn.disabled = true;
+    resetBtn.disabled = true;
+
+    // The measurement and quartet walk are one generation-bound result. The
+    // previous implementation put `compute(kind: quartet)` outside PanelRunner
+    // and checked only the split control before painting. Two different cases
+    // commonly share that split, so a slower old result could overwrite the
+    // newest walk. PanelRunner now drops the whole stale response atomically.
+    await runner.run(
+      { caseId: c.id, switchRound: String(sr), sbox },
+      'Measuring the switch and finding a real quartet…',
+      () =>
+        compute({
+          kind: 'quartet',
+          sbox,
+          alpha: c.alpha,
+          beta: c.beta,
+          gamma: c.gamma,
+          delta: c.delta,
+          rounds: c.rounds,
+          switchRound: sr,
+          startKey: 0x0000,
+          limit: MASTER_KEY_SPACE,
+        }) as Promise<QuartetOutcome>,
+      (result) => {
+        const sentence = renderMeasurement(c, sbox, sr);
+        renderWalk(result, c, sbox, sr);
+        return sentence;
+      }
+    );
   }
 
   function advance(): void {
