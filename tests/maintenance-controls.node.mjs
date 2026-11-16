@@ -113,3 +113,20 @@ test('the auto-merge path reads the bump type from the pull request and fails cl
   assert.equal(bumpType({ title: 'Bump next from 15.5.27 to 16.4.2', body: 'b' }), 'major');
   assert.equal(bumpType({ title: 'Bump zod from 0.4.1 to 0.5.0', body: 'b' }), 'major', '0.x minor is breaking');
 });
+
+test('the README quotes the suite sizes the spec files declare', () => {
+  // The README gave two different numbers for one suite -- "50 claims tests"
+  // beside the command and "43 tests" in the prose -- while the file declared
+  // 44. Counted here so neither can drift again. Every `test(` in these files
+  // is top-level; none is generated in a loop, which `playwright test --list`
+  // confirms (44 + 7 + 2 a11y = 53).
+  const readme = readFileSync(new URL('README.md', root), 'utf8');
+  const declared = (file) =>
+    (readFileSync(new URL(file, root), 'utf8').match(/^test\(/gm) ?? []).length;
+  const claims = declared('e2e/claims.spec.ts');
+  const entry = declared('e2e/entry.spec.ts');
+  assert.equal(claims, 44);
+  assert.equal(entry, 7);
+  assert.match(readme, new RegExp(`# ${claims} claims tests \\+ ${entry} entry-experience gates`));
+  assert.match(readme, new RegExp(`\\(\`e2e/claims\\.spec\\.ts\`, ${claims} tests\\)`));
+});

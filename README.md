@@ -237,7 +237,7 @@ npm test             # 155 unit tests (Vitest)
 npm run build        # tsc --noEmit && vite build
 npx playwright install chromium
 npm run test:a11y    # the axe WCAG 2.1 A/AA gate
-npm run test:claims  # 50 claims tests + 7 entry-experience gates
+npm run test:claims  # 44 claims tests + 7 entry-experience gates
 ```
 
 `npx playwright install chromium` — never `--with-deps`. That apt step wedged 547
@@ -290,7 +290,7 @@ content against a ratcheted baseline (which is **empty**), and checks reflow,
 scroller keyboard reach and focus visibility. Zero violations; the deploy is
 blocked if that changes.
 
-**The claims suite** (`e2e/claims.spec.ts`, 43 tests) checks the page tells the
+**The claims suite** (`e2e/claims.spec.ts`, 44 tests) checks the page tells the
 truth: the DDT, the BCT, the switch rate and the miss-in-the-middle diagram's
 forward set are all re-derived in the test from the S-box the page itself prints;
 every failure path names its actual cause; a changed input retires its verdict
