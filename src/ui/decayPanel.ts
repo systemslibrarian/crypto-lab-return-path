@@ -14,6 +14,7 @@ import { compute } from './compute.ts';
 import type { DecayResult, DecayRow } from '../crypto/jobs.ts';
 import type { SboxName } from '../crypto/sbox.ts';
 import { MAX_ROUNDS, PAIRS_PER_CODEBOOK } from '../crypto/spn.ts';
+import { MASTER_KEY_SPACE } from '../crypto/experiments.ts';
 import { legend, lineChart } from './chart.ts';
 import { PanelRunner } from './panel.ts';
 import {
@@ -105,6 +106,11 @@ export function decayPanel(): DecayPanel {
 
   let currentSbox: SboxName = 'weak';
 
+  keySelect.addEventListener('change', () => runner.retireIfChanged(
+    { sbox: currentSbox, keys: keySelect.value },
+    'The key count changed. Press “Measure the decay” to measure the new sample.'
+  ));
+
   async function run(sbox: SboxName): Promise<void> {
     currentSbox = sbox;
     const keyCount = Number(keySelect.value);
@@ -142,7 +148,9 @@ export function decayPanel(): DecayPanel {
         stat(
           'measured',
           log2Label(last.measured),
-          `95% ${last.ci[0].toExponential(2)}–${last.ci[1].toExponential(2)}, ${num(last.pairs)} pairs`,
+          last.keysUsed === MASTER_KEY_SPACE
+            ? `exact over all ${num(MASTER_KEY_SPACE)} keys, ${num(last.pairs)} pairs`
+            : `95% ${last.ci[0].toExponential(2)}–${last.ci[1].toExponential(2)}, ${num(last.pairs)} pairs`,
           'accent'
         ),
         stat('single-trail error', `${trailError.toFixed(1)}× too low`, 'measured ÷ trail', 'bad'),
@@ -159,7 +167,7 @@ export function decayPanel(): DecayPanel {
         yTitle: 'log2 probability',
         yMin,
         yMax: 0,
-        rules: [{ at: -8, label: 'random permutation', colorVar: '--series-null' }],
+        rules: [{ at: Math.log2(1 / 255), label: 'random permutation', colorVar: '--series-null' }],
         marker: threshold
           ? {
               atIndex: threshold.rounds - 1,
@@ -243,7 +251,7 @@ export function decayPanel(): DecayPanel {
         ]),
         el('p', {}, [
           document.createTextNode(
-            'The measured value is not identical to the summed prediction either. The sum assumes independent round keys; this schedule repeats every four rounds, so they are not. The residual gap is that assumption failing, and it is small here. Intervals are a cluster bootstrap over keys, not over pairs — the 128 pairs one key contributes are not 128 independent trials.'
+            'The measured value is not identical to the summed prediction either. The sum assumes independent round keys; this schedule repeats every four rounds, so they are not. The residual gap is that assumption failing, and it is small here. Sampling intervals are a cluster bootstrap over keys, not over pairs — the 128 pairs one key contributes are not 128 independent trials. Testing every key gives an exact rate for this cipher and its key schedule.'
           ),
         ]),
       ])

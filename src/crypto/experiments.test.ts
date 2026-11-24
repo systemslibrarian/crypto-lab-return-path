@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getSbox } from './sbox.ts';
 import { tablesFor } from './tables.ts';
-import { BLOCK_SIZE, generateKey } from './spn.ts';
+import { BLOCK_SIZE, generateKey, traceEncryption } from './spn.ts';
 import { bestTrail, roundTables } from './trails.ts';
 import {
   MASTER_KEY_SPACE,
@@ -24,6 +24,13 @@ const W = tablesFor(weak);
 const wTables = roundTables(W.ddt, 6);
 
 describe('Act 1: measured differential probability', () => {
+  it('a census has an exact rate, not a bootstrap sampling interval', () => {
+    const m = measureDifferential(0x0b, 0x02, 1, weak, MASTER_KEY_SPACE, 1);
+    expect(m.keysUsed).toBe(MASTER_KEY_SPACE);
+    expect(m.pairs).toBe(MASTER_KEY_SPACE * 128);
+    expect(m.hits / m.pairs).toBe(0.5);
+    expect(m.ci).toEqual([0.5, 0.5]);
+  });
   it('lands on the differential prediction, not the single-trail one, at R=6', () => {
     // The whole point of Act 1. The single trail predicts 2^-11.25; the sum over
     // trails predicts 2^-7.91; the cipher does what the sum says.
@@ -309,7 +316,7 @@ describe('Act 4: the boomerang distinguisher', () => {
     expect(common.quartets + common.degenerate).toBe(400 * (BLOCK_SIZE / 2));
   });
 
-  it('attributes most returns to the chosen trail', () => {
+  it('attributes most returns to the chosen forward difference', () => {
     const d = decomposeBoomerang(0x0b, 0x08, 0x50, 3, 2, weak, 1200, 2718);
     expect(d.onTrail / d.quartets).toBeCloseTo(0.5, 2);
     expect(d.onTrailReturned / d.returned).toBeGreaterThan(0.8);
@@ -389,6 +396,48 @@ describe('Act 5: the switch, measured over all 256 middle states', () => {
 });
 
 describe('findQuartet: the walk replays a real quartet', () => {
+  it('the key census matches independent enumeration including all round-key XORs', () => {
+    for (const [alpha, beta, gamma, delta, sr, expected] of [
+      [0x0b, 0x08, 0x10, 0x50, 2, 49152],
+      [0xbf, 0xbf, 0x51, 0x05, 1, 23040],
+    ]) {
+      let found = 0;
+      for (let mk = 0; mk < MASTER_KEY_SPACE; mk++) {
+        if (findQuartet(alpha, beta, gamma, delta, 3, sr, generateKey(mk), weak).found) found++;
+      }
+      expect(found).toBe(expected);
+    }
+  }, 120_000);
+  it('prints the actual S-box states after the nonzero switch-round key XOR', () => {
+    // Independently enumerated byte cipher, not values produced by this helper:
+    // key 0005, first-round switch, all four S-box inputs include XOR 05.
+    const key = generateKey(5);
+    const w = findQuartet(0xbf, 0xbf, 0x51, 0x05, 3, 1, key, weak);
+    expect(w.found).toBe(true);
+    expect([w.p1, w.p2, w.p3, w.p4]).toEqual([21, 170, 48, 143]);
+    expect([w.x1, w.x2, w.x3, w.x4]).toEqual([16, 175, 53, 138]);
+    expect([w.y1, w.y2, w.y3, w.y4]).toEqual([78, 103, 31, 54]);
+    expect([w.c1, w.c2, w.c3, w.c4]).toEqual([145, 182, 148, 179]);
+  });
+
+  it('every displayed intermediate state agrees with the full encryption trace', () => {
+    for (const [alpha, beta, gamma, delta, sr] of [[0x0b, 0x08, 0x10, 0x50, 2], [0xbf, 0xbf, 0x51, 0x05, 1]]) {
+      let checked = 0;
+      for (let mk = 0; mk < 256; mk++) {
+        const key = generateKey(mk);
+        const w = findQuartet(alpha, beta, gamma, delta, 3, sr, key, weak);
+        if (!w.found) continue;
+        for (const [p, x, y, c] of [[w.p1,w.x1,w.y1,w.c1], [w.p2,w.x2,w.y2,w.c2], [w.p3,w.x3,w.y3,w.c3], [w.p4,w.x4,w.y4,w.c4]]) {
+          const trace = traceEncryption(p, key, weak, 3);
+          expect(x).toBe(trace.find((stage) => stage.kind === 'xor-key' && stage.round === sr)!.state);
+          expect(y).toBe(trace.find((stage) => stage.kind === 'sbox' && stage.round === sr)!.state);
+          expect(c).toBe(trace.at(-1)!.state);
+        }
+        checked++;
+      }
+      expect(checked).toBeGreaterThan(10);
+    }
+  });
   it('finds a returning quartet on the ladder case and every value checks out', () => {
     const w = findQuartetAcrossKeys(0x0b, 0x08, 0x10, 0x50, 3, 2, weak, 0x0000).walk;
     expect(w.found).toBe(true);
@@ -430,12 +479,13 @@ describe('findQuartet: the walk replays a real quartet', () => {
 
 
   it('a trail probability is not a promise about one key', () => {
-    // 6144 of the 65536 keys carry a trail-following quartet on the ladder case.
+    // 49152 of the 65536 keys carry a trail-following quartet on the ladder case.
     // Measured, because the honest version of "p = 1/2" is a rate over keys and
     // pairs, not a guarantee for the key in front of you.
     let withQuartet = 0;
     for (let mk = 0; mk < 4096; mk++) {
-      if (findQuartet(0x0b, 0x08, 0x10, 0x50, 3, 2, generateKey(mk), weak).found) withQuartet++;
+      // Cover every high-nibble region; keys 0000..0fff all realise this trail.
+      if (findQuartet(0x0b, 0x08, 0x10, 0x50, 3, 2, generateKey(mk << 4), weak).found) withQuartet++;
     }
     expect(withQuartet).toBeGreaterThan(0);
     expect(withQuartet).toBeLessThan(4096);

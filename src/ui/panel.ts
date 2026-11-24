@@ -22,7 +22,7 @@
  *     usual well-meant mistake.
  */
 import { Latest, setBusy, type Ticket } from './latest.ts';
-import { el, markRun } from './dom.ts';
+import { el, markRun, verdict } from './dom.ts';
 import { usingWorker } from './compute.ts';
 
 export interface RunMeta {
@@ -38,6 +38,8 @@ export class PanelRunner<I extends Record<string, unknown>> {
   readonly meta: HTMLElement;
   #latest = new Latest<I>();
   #buttons: HTMLButtonElement[] = [];
+  #inputs: I | null = null;
+  #busy = false;
 
   constructor(id: string, label: string) {
     // A labelled region, not a status: see rule 2 above.
@@ -66,7 +68,30 @@ export class PanelRunner<I extends Record<string, unknown>> {
 
   /** True while a run is outstanding: a guard for the click handlers. */
   get busy(): boolean {
-    return this.#latest.busy;
+    return this.#busy;
+  }
+
+  /** Inputs behind the pending or completed result, not only what has rendered. */
+  get inputs(): I | null {
+    return this.#inputs;
+  }
+
+  /** Old work may finish, but can no longer publish a result or hold controls. */
+  invalidate(): void {
+    this.#latest.invalidate();
+    this.#inputs = null;
+    this.#busy = false;
+    setBusy(this.out, false);
+    this.#setAvailability(true);
+  }
+
+  retireIfChanged(inputs: I, message: string, className = 'result-retired'): void {
+    if (!this.#inputs || Object.keys(inputs).every((key) => inputs[key] === this.#inputs?.[key])) return;
+    this.invalidate();
+    this.out.replaceChildren(verdict('info', 'VERDICT RETIRED', message, className));
+    this.announce.textContent = 'Verdict retired: the inputs changed.';
+    this.meta.textContent = '';
+    markRun(this.out);
   }
 
   #setAvailability(available: boolean): void {
@@ -95,6 +120,8 @@ export class PanelRunner<I extends Record<string, unknown>> {
     render: (result: R, meta: RunMeta) => string
   ): Promise<void> {
     const ticket = this.#latest.begin(inputs);
+    this.#inputs = ticket.inputs;
+    this.#busy = true;
     setBusy(this.out, true);
     this.#setAvailability(false);
     this.announce.textContent = '';
@@ -112,10 +139,11 @@ export class PanelRunner<I extends Record<string, unknown>> {
           el('p', { class: 'field-hint', text: `The run did not complete: ${String(err)}` })
         );
         this.announce.textContent = 'The run did not complete.';
+        this.#busy = false;
         setBusy(this.out, false);
+        this.#setAvailability(true);
         markRun(this.out);
       }
-      this.#setAvailability(true);
       return;
     }
     const elapsedMs = Math.round(performance.now() - started);
@@ -132,6 +160,7 @@ export class PanelRunner<I extends Record<string, unknown>> {
     const sentence = render({ ...(result as object) } as R, { elapsedMs, worker });
     this.meta.textContent = `${elapsedMs} ms, ${worker ? 'in a worker thread' : 'on the main thread (no worker available)'}.`;
     this.announce.textContent = sentence;
+    this.#busy = false;
     setBusy(this.out, false);
     this.#setAvailability(true);
     markRun(this.out);

@@ -90,8 +90,6 @@ export function impossiblePanel(): ImpossiblePanel {
   runner.manage(runBtn);
 
   let currentSbox: SboxName = 'weak';
-  /** The inputs behind the result currently on screen, so a change can retire it. */
-  let shown: { alpha: string; delta: string; keys: string; rounds: string; sbox: SboxName } | null = null;
 
   function inputs(): { alpha: string; delta: string; keys: string; rounds: string; sbox: SboxName } {
     return {
@@ -110,6 +108,7 @@ export function impossiblePanel(): ImpossiblePanel {
    * claims suite.
    */
   function retireIfStale(): void {
+    const shown = runner.inputs;
     if (!shown) return;
     const now = inputs();
     const changed: string[] = [];
@@ -119,24 +118,15 @@ export function impossiblePanel(): ImpossiblePanel {
     if (now.rounds !== shown.rounds) changed.push('the round count');
     if (now.sbox !== shown.sbox) changed.push('the substitution table');
     if (changed.length === 0) return;
-    shown = null;
-    clear(runner.out);
-    runner.out.append(
-      verdict(
-        'info',
-        'VERDICT RETIRED',
-        `${changed.join(' and ')} changed, so the result that was here no longer answers the question on screen. Press “Try to make it happen” to measure the new one.`,
-        'imp-retired'
-      )
+    runner.retireIfChanged(
+      now,
+      `${changed.join(' and ')} changed, so the result that was here no longer answers the question on screen. Press “Try to make it happen” to measure the new one.`,
+      'imp-retired'
     );
-    runner.announce.textContent = 'Verdict retired: the inputs changed.';
-    runner.meta.textContent = '';
-    setBusy(runner.out, false);
-    markRun(runner.out);
   }
 
   function fail(code: string): void {
-    shown = null;
+    runner.invalidate();
     clear(runner.out);
     runner.out.append(
       verdict('fail', `NOT RUN — ${code}`, FAILURE_TEXT[code as keyof typeof FAILURE_TEXT], 'imp-failure')
@@ -173,10 +163,7 @@ export function impossiblePanel(): ImpossiblePanel {
           keyCount,
           seed: 424242,
         }) as Promise<ImpossibleResult>,
-      (result) => {
-        shown = snapshot;
-        return render(result);
-      }
+      (result) => render(result)
     );
   }
 
@@ -207,12 +194,21 @@ export function impossiblePanel(): ImpossiblePanel {
           'imp-verdict'
         )
       );
-    } else {
+    } else if (r.occurrences > 0) {
       out.append(
         verdict(
           'info',
           'POSSIBLE — AND IT HAPPENED',
           `${hex8(r.alpha)} → ${hex8(r.delta)} is reachable, and turned up ${num(r.occurrences)} times in ${num(r.pairs)} pairs. Nothing is proven by a difference that merely can happen \u2014 try a ruled-out one below.`,
+          'imp-verdict'
+        )
+      );
+    } else {
+      out.append(
+        verdict(
+          'info',
+          r.exhaustiveOverKeys ? 'NOT OBSERVED — EVERY KEY TESTED' : 'NOT RULED OUT — NOT OBSERVED',
+          `${hex8(r.alpha)} → ${hex8(r.delta)} was not ruled out by the structural test, but occurred zero times in ${num(r.pairs)} pairs under ${num(r.keysUsed)} ${r.exhaustiveOverKeys ? 'keys. Exhaustion proves it absent for this cipher and its key schedule, although the structural test alone did not' : 'sampled keys. A zero in a sample is not a proof of impossibility, and the structural test is not an observed example'}.`,
           'imp-verdict'
         )
       );
@@ -224,7 +220,7 @@ export function impossiblePanel(): ImpossiblePanel {
         stat(
           `times ${hex8(r.delta)} appeared`,
           num(r.occurrences),
-          r.predictedImpossible ? 'predicted: never' : 'predicted: reachable',
+          r.predictedImpossible ? 'predicted: never' : 'structural test: not ruled out',
           r.predictedImpossible ? (r.occurrences === 0 ? 'good' : 'bad') : undefined
         ),
         stat(
@@ -242,11 +238,11 @@ export function impossiblePanel(): ImpossiblePanel {
     );
 
     if (r.impossibleDiffs.length > 0) {
-      const oneNibble = r.impossibleDiffs.every((d) => (((d >> 4) & 0xf) === 0) !== ((d & 0xf) === 0));
+      const oneNibble = r.impossibleDiffs.length === 30 && r.impossibleDiffs.every((d) => (((d >> 4) & 0xf) === 0) !== ((d & 0xf) === 0));
       out.append(
         el('p', { class: 'field-hint' }, [
           document.createTextNode(
-            `Every difference ${hex8(r.alpha)} can never produce after ${r.rounds} rounds${oneNibble ? ' — exactly the set that leaves one of the two S-boxes quiet' : ''}:`
+            `Differences the structural test rules out from ${hex8(r.alpha)} after ${r.rounds} rounds${oneNibble ? ' — exactly the set that leaves one of the two S-boxes quiet' : ''}:`
           ),
         ])
       );
@@ -296,7 +292,7 @@ export function impossiblePanel(): ImpossiblePanel {
 
     return r.predictedImpossible
       ? `Measurement complete: ${num(r.occurrences)} occurrences in ${num(r.pairs)} pairs. ${r.occurrences === 0 ? 'The differential is impossible.' : 'The impossibility claim was withdrawn.'}`
-      : `Measurement complete: ${num(r.occurrences)} occurrences in ${num(r.pairs)} pairs. The differential is possible.`;
+      : `Measurement complete: ${num(r.occurrences)} occurrences in ${num(r.pairs)} pairs. ${r.occurrences > 0 ? 'The differential is possible.' : r.exhaustiveOverKeys ? 'Every key was tested; the differential never occurred.' : 'Not ruled out, but not observed in this sample.'}`;
   }
 
   const node = el('section', { class: 'card', 'aria-labelledby': 'act2-title', id: 'act2' }, [

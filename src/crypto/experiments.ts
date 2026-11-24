@@ -195,7 +195,8 @@ export function measureDifferential(
     pairs += n;
     clusters.push({ successes: h, trials: n });
   }
-  return { hits, pairs, keysUsed: keys, ci: clusterInterval(clusters, seed ^ 0xd1ff) };
+  const rate = pairs > 0 ? hits / pairs : 0;
+  return { hits, pairs, keysUsed: keys, ci: keys === MASTER_KEY_SPACE ? [rate, rate] : clusterInterval(clusters, seed ^ 0xd1ff) };
 }
 
 // ── Act 2: a difference that never happens ─────────────────────────────────
@@ -544,12 +545,12 @@ export function runBoomerangNull(
 }
 
 /**
- * How much of a measured return rate follows the trail that was chosen.
+ * How much of a measured return rate reaches the chosen FORWARD difference.
  *
  * Reads the real middle difference, which needs the key — so this is an
  * instrument, not an attack, and the page labels it that way. It is the only
- * honest way to say whether a measured rate belongs to the stated trail or to
- * the hundreds of other paths sharing the same (alpha, delta).
+ * It does not check either backward gamma condition, so it cannot certify the
+ * whole stated trail. The walk below checks all four legs separately.
  */
 export function decomposeBoomerang(
   alpha: number,
@@ -760,11 +761,12 @@ export function findQuartet(
     followsStatedTrail: false,
   };
   if (alpha === 0 || delta === 0) return empty;
+  const switchKey = roundKey(key, switchRound - 1);
   for (let p1 = 0; p1 < BLOCK_SIZE; p1++) {
     const p2 = p1 ^ alpha;
     if (p2 < p1) continue;
-    const x1 = encryptToRoundInput(p1, key, sbox, switchRound - 1);
-    const x2 = encryptToRoundInput(p2, key, sbox, switchRound - 1);
+    const x1 = encryptToRoundInput(p1, key, sbox, switchRound - 1) ^ switchKey;
+    const x2 = encryptToRoundInput(p2, key, sbox, switchRound - 1) ^ switchKey;
     if (((x1 ^ x2) & 0xff) !== beta) continue;
     const c1 = encrypt(p1, key, sbox, rounds);
     const c2 = encrypt(p2, key, sbox, rounds);
@@ -773,8 +775,8 @@ export function findQuartet(
     const c4 = (c2 ^ delta) & 0xff;
     const p3 = decrypt(c3, key, sbox, rounds);
     const p4 = decrypt(c4, key, sbox, rounds);
-    const x3 = encryptToRoundInput(p3, key, sbox, switchRound - 1);
-    const x4 = encryptToRoundInput(p4, key, sbox, switchRound - 1);
+    const x3 = encryptToRoundInput(p3, key, sbox, switchRound - 1) ^ switchKey;
+    const x4 = encryptToRoundInput(p4, key, sbox, switchRound - 1) ^ switchKey;
     const y1 = substitute(x1, sbox);
     const y2 = substitute(x2, sbox);
     const y3 = substitute(x3, sbox);
@@ -828,8 +830,8 @@ export function findQuartet(
  * Scan master keys for one that actually realises the stated trail in a quartet.
  *
  * Needed because a trail's probability is not a promise about a particular key.
- * On the ladder case 6144 of the 65536 keys carry a trail-following quartet
- * within the 128 pairs the codebook offers; on the amplified case 864 do; and on
+ * On the weak-box ladder case 49152 of the 65536 keys carry a trail-following
+ * quartet within the 128 pairs the codebook offers; on the amplified case 23040 do; and on
  * some cases NONE do, because the four legs of the trail impose four conditions
  * at once on a 256-state middle and the conjunction can be empty for every key.
  * The walk reports which key it used and how many it tried, so the reader sees

@@ -93,7 +93,9 @@ acts in order.
    the narrower pooled interval shown beside them so the cost of assuming
    independence is visible. Degenerate quartets are excluded and counted, the
    per-key spread is drawn as a distribution, and a decomposition reports what
-   share of the returns followed the stated trail.
+   share of the returns reached the stated forward middle difference. This
+   instrument checks only that forward condition, not both backward legs; the
+   quartet walk checks the complete trail separately.
 5. **The switch, where the estimate breaks.** The headline exhibit, in two parts.
    A real quartet stepped through eight stages on a square whose corners never
    move — every value produced by the real cipher under a real key — stopping at
@@ -163,16 +165,17 @@ wired to a test:
 - **A recovered subkey is not a recovered key.** The sieve returns 8 of the 16
   master-key bits. 256 master keys share the recovered byte.
 - **An end-to-end rate cannot be attributed to one trail.** Hundreds of middle
-  paths share any two end differences. Act 4 separates them with an instrument
-  that reads the key (and says so); Act 5 avoids the problem entirely.
+  paths share any two end differences. Act 4 measures the share reaching one
+  forward middle difference with an instrument that reads the key (and says so).
+  That does not certify the complete trail. Act 5 checks all four legs.
 - **The impossible differential covers three rounds, not four.** On the full
   four-round cipher every output difference is reachable from every input
   difference. That is the measured result, not a gap in the search.
-- **A one-layer switch can only help the boomerang.** `BCT ≥ DDT` pointwise,
-  proven entry by entry in the tests. So Murphy's incompatibility, in the form
-  where the real rate falls far *below* the estimate, needs a middle section
-  wider than one substitution layer — which this page does not model and does not
-  claim to.
+- **The comparison must include the same switch conditions.** `BCT ≥ DDT`
+  pointwise, so the round trip is no harder than paying the same one-way
+  crossing twice. This does not make the switch free: `p²q²` ignores it. A
+  round-trip probability below one can lower that estimate; a zero entry rules
+  out the stated quartet trail even at one substitution layer.
 - **Small blocks distort the boomerang.** Degenerate quartets, where the
   ciphertext shift happens to equal the pair's own difference, return for free.
   Negligible at 64 bits; percent-scale here. They are excluded and counted — and
@@ -181,15 +184,19 @@ wired to a test:
   block.
 - **Pooled intervals lie when the samples are clustered.** The 128 quartets one
   key contributes share its subkeys, so treating them as 128 independent trials
-  reports an interval that is too narrow. Every interval here resamples keys.
+  reports an interval that is too narrow. Sampling intervals resample keys.
+  A census of every key reports an exact rate instead of sampling uncertainty.
 - **A trail search does not find the best differential.** From four rounds on,
   the endpoint pair joined by the strongest trail is not the pair with the
   strongest differential. A tool that maximises one and reports the other is
   claiming more than it computed, which is why this lab names the two functions
   apart.
-- **A trail probability is not a promise about your key.** Only 6 144 of the
-  65 536 keys carry a quartet realising the shipped trail, and for one of the four
-  cases **no key does**. The page reports which key it found and how many it tried.
+- **A trail probability is not a promise about your key.** With the weak S-box,
+  49 152 of the 65 536 keys carry the disjoint case's complete quartet and 23 040
+  carry the amplified case's. For the control and incompatible cases **no key
+  does**. These counts include the switch round's key XOR and agree with a
+  separate exhaustive implementation. The page reports which key it found and
+  how many it tried.
 
 ## Real-World Usage
 
@@ -233,11 +240,11 @@ npm run dev          # http://localhost:5173/crypto-lab-return-path/
 ```
 
 ```sh
-npm test             # 155 unit tests (Vitest)
+npm test             # 160 unit tests (Vitest)
 npm run build        # tsc --noEmit && vite build
 npx playwright install chromium
 npm run test:a11y    # the axe WCAG 2.1 A/AA gate
-npm run test:claims  # 44 claims tests + 7 entry-experience gates
+npm run test:claims  # 53 claims tests + 7 entry-experience gates
 ```
 
 `npx playwright install chromium` — never `--with-deps`. That apt step wedged 547
@@ -261,7 +268,7 @@ This is the third lab on one cipher, and the three are meant to be read in order
 
 ## Build & Verify
 
-**155 unit tests (Vitest), all passing.** The checks that matter most:
+**160 unit tests (Vitest), all passing.** The checks that matter most:
 
 | What | Where |
 |---|---|
@@ -275,6 +282,8 @@ This is the third lab on one cipher, and the three are meant to be read in order
 | There is no 4-round impossible differential, for any input difference, either S-box | `src/crypto/trails.test.ts` |
 | Invariant I5: the sieve never eliminates the true subkey — 400 keys, fixed and random seeds | `src/crypto/experiments.test.ts` |
 | The switch measured over all 256 middle states equals the BCT for **all 65 025 (β, γ) pairs** | `src/crypto/experiments.test.ts` |
+| Complete-quartet counts over every master key are 49 152 for the weak-box disjoint case and 23 040 for the amplified case; intermediate states include the actual switch-round key XOR | `src/crypto/experiments.test.ts` |
+| A census of every key reports the exact rate rather than a bootstrap interval | `src/crypto/experiments.test.ts` |
 | The boomerang beats a real random-permutation null with non-overlapping intervals, and `p²q²` overstates the measurement | `src/crypto/experiments.test.ts` |
 | The random-permutation null is `1/(N−3)`, not `1/(N−1)` — derived by enumerating **all 24 and all 40 320 permutations** of a 4- and an 8-element block under the same exclusion rule | `src/crypto/experiments.test.ts` |
 | Intervals resample keys, not quartets: the cluster bootstrap is wider than the pooled Wilson interval, and the distinguisher survives the correction at the shipped default | `src/crypto/experiments.test.ts` |
@@ -290,13 +299,18 @@ content against a ratcheted baseline (which is **empty**), and checks reflow,
 scroller keyboard reach and focus visibility. Zero violations; the deploy is
 blocked if that changes.
 
-**The claims suite** (`e2e/claims.spec.ts`, 44 tests) checks the page tells the
+**The claims suite** (`e2e/claims.spec.ts`, 53 tests) checks the page tells the
 truth: the DDT, the BCT, the switch rate and the miss-in-the-middle diagram's
 forward set are all re-derived in the test from the S-box the page itself prints;
 every failure path names its actual cause; a changed input retires its verdict
 while re-entering the same value does not; and the negative claim's fixture is
 reached through the UI, shown to be green in every check, and asserted to carry
-its limitation on screen, outside every disclosure.
+its limitation on screen, outside every disclosure. Controlled worker delivery
+checks edits during pending runs and deliberately reversed completion order;
+a forced invariant breach must remove every sieve success claim. Zero sampled
+matches, estimates below a positive interval, and a detectable return deficit
+are checked separately. Case stories and complete quartet states follow both
+the selected S-box and the split.
 
 **The entry gate** (`e2e/entry.spec.ts`, 7 tests) enforces the things that make
 the page enterable rather than merely correct: a real interaction inside the

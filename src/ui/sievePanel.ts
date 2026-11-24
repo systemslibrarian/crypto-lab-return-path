@@ -85,12 +85,19 @@ export function sievePanel(): SievePanel {
 
   let currentSbox: SboxName = 'weak';
 
+  const inputs = () => ({ alphas: alphaSelect.value, key: keyInput.value.trim().toLowerCase(), rounds: roundSelect.value, sbox: currentSbox });
+  const retireIfStale = () => runner.retireIfChanged(inputs(), 'The sieve inputs changed. Press “Run the sieve” to check the new key and parameters.');
+  keyInput.addEventListener('input', retireIfStale);
+  alphaSelect.addEventListener('change', retireIfStale);
+  roundSelect.addEventListener('change', retireIfStale);
+
   async function run(sbox: SboxName): Promise<void> {
     currentSbox = sbox;
     const raw = keyInput.value.trim().toLowerCase().replace(/^0x/, '');
     const valid = /^[0-9a-f]{1,4}$/.test(raw);
     keyInput.setAttribute('aria-invalid', valid ? 'false' : 'true');
     if (!valid) {
+      runner.invalidate();
       clear(runner.out);
       runner.out.append(
         verdict('fail', `NOT RUN — ${FAILURE_CODES.RANGE}`, FAILURE_TEXT.E_RANGE, 'sieve-failure')
@@ -154,7 +161,7 @@ export function sievePanel(): SievePanel {
         verdict(
           'pass',
           'SUBKEY RECOVERED — AND THE MASTER KEY IS STILL SECRET',
-          `One candidate survived, ${hex8(r.survivors[0])}, and it is the true final mixing key. That is 8 of the 16 master-key bits. The other 8 are untouched: ${num(256)} master keys still end in this subkey, and nothing here distinguishes them. A recovered subkey is not a recovered key.`,
+          `One candidate survived, ${hex8(r.survivors[0])}, and it is the true final mixing key. That is 8 of the 16 master-key bits. The other 8 are untouched: ${num(256)} master keys share this final subkey, and nothing here distinguishes them. A recovered subkey is not a recovered key.`,
           'sieve-verdict'
         )
       );
@@ -169,7 +176,7 @@ export function sievePanel(): SievePanel {
       );
     }
 
-    out.append(
+    if (r.trueSubkeySurvived) out.append(
       verdict(
         'pass',
         'THE TRUE SUBKEY WAS NEVER ELIMINATED',
@@ -180,7 +187,7 @@ export function sievePanel(): SievePanel {
 
     out.append(
       el('div', { class: 'readout' }, [
-        stat('candidates left', num(r.survivors.length), 'of 256 guesses', unique ? 'good' : 'warn'),
+        stat('candidates left', num(r.survivors.length), 'of 256 guesses', !r.trueSubkeySurvived ? 'bad' : unique ? 'good' : 'warn'),
         stat('pairs spent', num(r.pairsUsed), `${num(r.pairsAvailable)} available`, 'accent'),
         stat('true subkey', hex8(r.trueSubkey), `K${r.rounds + 1}, from ${hex16(r.masterKey)}`),
         stat(
@@ -211,7 +218,7 @@ export function sievePanel(): SievePanel {
         el('p', {}, [
           el('strong', { text: 'Why one 8-bit guess is enough. ' }),
           document.createTextNode(
-            'The last round computes C = S(X XOR K4) XOR K5, so X = S-inverse(C XOR K5) XOR K4 \u2014 and in the XOR of two such values K4 cancels. The difference entering the last substitution depends on K5 alone: 256 guesses, not 65 536. The schedule then hands over a bonus, because it repeats every four rounds: K5 is K1, the low byte of the master key.'
+            `The last round computes C = S(X XOR K${r.rounds}) XOR K${r.rounds + 1}, so X = S-inverse(C XOR K${r.rounds + 1}) XOR K${r.rounds} — and in the XOR of two such values K${r.rounds} cancels. The difference entering the last substitution depends on K${r.rounds + 1} alone: 256 guesses, not 65 536. ${r.rounds === 4 ? 'The schedule repeats every four rounds: K5 is K1, the low byte of the master key.' : 'For three rounds, the final key is K4: the low byte after rotating the 16-bit master key left by 12 bits. It is not the master key’s low byte.'}`
           ),
         ]),
         el('p', {}, [
@@ -227,7 +234,7 @@ export function sievePanel(): SievePanel {
       ])
     );
 
-    return `Sieve complete: ${num(r.survivors.length)} of 256 candidates left after ${num(r.pairsUsed)} pairs. The true subkey survived.`;
+    return `Sieve complete: ${num(r.survivors.length)} of 256 candidates left after ${num(r.pairsUsed)} pairs. ${r.trueSubkeySurvived ? 'The true subkey survived.' : `Invariant breach: ${FAILURE_CODES.TRUE_KEY_ELIMINATED}. The true subkey was eliminated.`}`;
   }
 
   const node = el('section', { class: 'card', 'aria-labelledby': 'act3-title', id: 'act3' }, [

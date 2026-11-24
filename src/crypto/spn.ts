@@ -131,9 +131,9 @@ export function invertCodebook(codebook: Uint8Array): Uint8Array {
 }
 
 /**
- * The state entering round `stopBefore`'s S-box — that is, after the key XOR of
- * that round has been applied. Differences do not see the key XOR, so this is
- * the point every trail in this lab is measured at.
+ * The state entering round `stopBefore`, BEFORE that round's key XOR.
+ * Differences do not see the common key XOR. To display actual S-box input
+ * states, apply `roundKey(key, stopBefore)` to this state first.
  *
  * `stopBefore = 0` returns the plaintext itself.
  */

@@ -23,7 +23,7 @@ import { getSbox, type SboxName } from '../crypto/sbox.ts';
 import { tablesFor } from '../crypto/tables.ts';
 import { measureSwitch, MASTER_KEY_SPACE, type SwitchMeasurement } from '../crypto/experiments.ts';
 import type { QuartetWalk } from '../crypto/experiments.ts';
-import { SWITCH_CASES, caseNumbers, type SwitchCase } from './cases.ts';
+import { SWITCH_CASES, caseNumbers, caseStory, type SwitchCase } from './cases.ts';
 import { quartetSquare, type QuartetDiagramData } from './diagrams.ts';
 import { tableView } from './tableView.ts';
 import { PanelRunner } from './panel.ts';
@@ -75,8 +75,8 @@ function walkSteps(c: SwitchCase, w: QuartetWalk, n: ReturnType<typeof caseNumbe
     {
       text:
         n.e0Layers === 0
-          ? `The switch is at round 1, so the first half is empty and the pair arrives still differing by alpha. States ${both(w.x1, w.x2)}.`
-          : `Encrypt ${n.e0Layers} round${n.e0Layers === 1 ? '' : 's'} to reach the switch. States ${both(w.x1, w.x2)}.`,
+          ? `The switch is at round 1, so the first half is empty. Apply this round's key XOR; the pair still differs by alpha. S-box input states ${both(w.x1, w.x2)}.`
+          : `Encrypt ${n.e0Layers} round${n.e0Layers === 1 ? '' : 's'} and apply the switch round's key XOR. S-box input states ${both(w.x1, w.x2)}.`,
       diff: `difference at the switch = ${hex8(w.x1 ^ w.x2)}`,
       note: `beta = ${hex8(c.beta)}${n.e0Layers === 0 ? ' (= alpha, first half empty)' : `, this half holds with probability ${n.p.toFixed(4)}`}`,
     },
@@ -108,7 +108,7 @@ function walkSteps(c: SwitchCase, w: QuartetWalk, n: ReturnType<typeof caseNumbe
       diff: `difference back at the switch = ${hex8(w.x3 ^ w.x4)}`,
       note:
         w.backwardMid === c.beta
-          ? `beta again. The round-trip table gives ${n.bctHigh} of 16 and ${n.bctLow} of 16 — and the crossing a trail called impossible has just happened in both directions at once.`
+          ? `beta again. The round-trip table gives ${n.bctHigh} of 16 and ${n.bctLow} of 16${n.ddtHigh === 0 || n.ddtLow === 0 ? ' — and a crossing impossible in one direction has just succeeded as a round trip' : ' — the round-trip condition succeeded'}.`
           : 'Not beta: this quartet did not close at the switch.',
     },
     {
@@ -168,8 +168,9 @@ export function switchPanel(): SwitchPanel {
   let steps: Step[] = [];
   let shown = 0;
   let walk: QuartetWalk | null = null;
+  let walkKeyNote = '';
   const listeners: ((id: string) => void)[] = [];
-  const storyOut = el('div', { id: 'switch-story' }, [el('p', { text: SWITCH_CASES[0].story })]);
+  const storyOut = el('div', { id: 'switch-story' });
 
   function switchRound(): number {
     return Number(splitSelect.value || currentCase.switchRound);
@@ -222,6 +223,7 @@ export function switchPanel(): SwitchPanel {
       markRun(stepsOut);
       return;
     }
+    stepsOut.append(el('p', { class: 'field-hint', id: 'walk-key', text: walkKeyNote }));
     const list = el('div', { class: 'steps' });
     steps.forEach((s, i) => {
       const state = i < shown - 1 ? 'done' : i === shown - 1 ? 'current' : 'pending';
@@ -250,11 +252,12 @@ export function switchPanel(): SwitchPanel {
 
     if (shown >= steps.length && walk.returned) {
       const n = caseNumbers(currentCase, currentSbox, switchRound());
+      const oneWayImpossible = n.ddtHigh === 0 || n.ddtLow === 0;
       stepsOut.append(
         verdict(
           'alarm',
-          'IMPOSSIBLE ONE WAY — AND THE BOOMERANG STILL RETURNED',
-          `Every check in this walk passed: the forward half reached beta, both backward pairs carried gamma, the round trip closed on beta, and the plaintext difference came back as alpha. And the one-way crossing at the switch has table entries of ${n.ddtHigh}/16 and ${n.ddtLow}/16. A zero there proves a difference can never cross in one direction. It does not prove the boomerang cannot cross it.`,
+          oneWayImpossible ? 'IMPOSSIBLE ONE WAY — AND THE BOOMERANG STILL RETURNED' : 'THE COMPLETE QUARTET RETURNED',
+          `Every check in this walk passed: the forward half reached beta, both backward pairs carried gamma, the round trip closed on beta, and the plaintext difference came back as alpha. The one-way crossing at the switch has table entries of ${n.ddtHigh}/16 and ${n.ddtLow}/16. ${oneWayImpossible ? 'A zero there proves a difference can never cross in one direction. It does not prove the boomerang cannot cross it.' : 'Both entries are positive; this example does not assert one-way impossibility. The round trip is a different condition, measured separately below.'}`,
           'walk-verdict'
         )
       );
@@ -306,7 +309,7 @@ export function switchPanel(): SwitchPanel {
             : mine.measured > 0
               ? 'infinitely'
               : 'not at all',
-          mine.measured > 0 && mine.trailPrediction === 0 ? 'it predicts never; it happens always' : 'measured ÷ trail',
+          mine.measured > 0 && mine.trailPrediction === 0 ? `it predicts never; ${mine.closed} of 256 states close` : 'measured ÷ trail',
           mine.matchesTrail ? undefined : 'bad'
         ),
       ])
@@ -365,8 +368,8 @@ export function switchPanel(): SwitchPanel {
                 el('th', { scope: 'row', text: SWITCH_CASES[i].short }),
                 el('td', { text: hex8(m.beta) }),
                 el('td', { text: hex8(m.gamma) }),
-                el('td', { text: `${m.ddtHigh}x${m.ddtLow} /16` }),
-                el('td', { text: `${m.bctHigh}x${m.bctLow} /16` }),
+                el('td', { text: `${m.ddtHigh}/16 × ${m.ddtLow}/16` }),
+                el('td', { text: `${m.bctHigh}/16 × ${m.bctLow}/16` }),
                 el('td', { text: `${m.closed}/256` }),
                 el('td', {
                   text:
@@ -417,7 +420,7 @@ export function switchPanel(): SwitchPanel {
         ),
         el('p', {}, [
           document.createTextNode(
-            'Three identities hold for any invertible S-box, and the suite checks all three by brute force rather than quoting them: the round-trip table’s first row and column are all 16; every round-trip entry is at least the matching one-way entry; and every round-trip entry is even. The second has a consequence worth stating plainly — at a single substitution layer the round trip can only ever be EASIER than the one-way crossing, never harder. So a switch this narrow cannot be what makes a boomerang rarer than predicted; that needs a wider middle than this page covers.'
+            'Three identities hold for any invertible S-box, and the suite checks all three by brute force: the round-trip table’s first row and column are all 16; every round-trip entry is at least the matching one-way entry; and every round-trip entry is even. At one substitution layer the round trip is at least as likely as the same one-way crossing, and therefore as paying that crossing twice. This does not make the switch free: p2q2 ignores it, while a round-trip probability below one still imposes a cost and a zero entry rules out the stated trail.'
           ),
         ]),
       ])
@@ -454,13 +457,7 @@ export function switchPanel(): SwitchPanel {
     } else {
       stepBtn.disabled = false;
       resetBtn.disabled = false;
-      stepsOut.append(
-        el('p', { class: 'field-hint', id: 'walk-key' }, [
-          document.createTextNode(
-            `Key ${hex16(result.masterKey)}, found after trying ${num(result.keysTried)} of ${num(MASTER_KEY_SPACE)}. Every value below comes from the real cipher under that key.`
-          ),
-        ])
-      );
+      walkKeyNote = `Key ${hex16(result.masterKey)}, found after trying ${num(result.keysTried)} of ${num(MASTER_KEY_SPACE)}. Every value below comes from the real cipher under that key.`;
       walkAnnounce.textContent = `Quartet found under key ${hex16(result.masterKey)}. Step 1 of ${TOTAL_STEPS}.`;
       renderSteps();
     }
@@ -471,6 +468,7 @@ export function switchPanel(): SwitchPanel {
     currentSbox = sbox;
     const c = currentCase;
     const sr = switchRound();
+    storyOut.replaceChildren(el('p', { text: caseStory(c, sbox, sr) }));
 
     // Retire the old quartet immediately. Leaving its square visible while a
     // new case or S-box is running pairs old evidence with current controls.
@@ -540,7 +538,6 @@ export function switchPanel(): SwitchPanel {
       for (const [otherId, other] of buttons) other.setAttribute('aria-pressed', otherId === id ? 'true' : 'false');
       refreshSplitOptions();
       splitSelect.value = String(currentCase.switchRound);
-      storyOut.replaceChildren(el('p', { text: currentCase.story }));
       void run(currentSbox);
       for (const fn of listeners) fn(id);
     });
@@ -612,7 +609,6 @@ export function switchPanel(): SwitchPanel {
       for (const [otherId, other] of buttons) other.setAttribute('aria-pressed', otherId === currentCase.id ? 'true' : 'false');
       refreshSplitOptions();
       splitSelect.value = String(currentCase.switchRound);
-      storyOut.replaceChildren(el('p', { text: currentCase.story }));
       await run(sbox);
     },
     state: () => ({ case: currentCase.id, switchRound: splitSelect.value }),
@@ -620,7 +616,6 @@ export function switchPanel(): SwitchPanel {
       if (s.case && SWITCH_CASES.some((c) => c.id === s.case)) {
         currentCase = SWITCH_CASES.find((c) => c.id === s.case)!;
         for (const [otherId, other] of buttons) other.setAttribute('aria-pressed', otherId === s.case ? 'true' : 'false');
-        storyOut.replaceChildren(el('p', { text: currentCase.story }));
       }
       refreshSplitOptions();
       if (s.switchRound && Number(s.switchRound) >= 1 && Number(s.switchRound) <= currentCase.rounds) {

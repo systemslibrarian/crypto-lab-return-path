@@ -49,6 +49,11 @@ export class Latest<I> {
     };
   }
 
+  /** Retire every issued ticket when its inputs change, even without a new run. */
+  invalidate(): void {
+    this.#id += 1;
+  }
+
   /**
    * Close a request. Returns true when this ticket is still the newest, i.e.
    * when the caller may render and clear the busy state.

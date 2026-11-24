@@ -7,6 +7,15 @@ import { Latest } from './latest.ts';
  * a browser test cannot reliably force a Worker to answer out of order.
  */
 describe('Latest: the newest request wins regardless of arrival order', () => {
+  it('editing inputs retires a pending ticket even before another run starts', () => {
+    const latest = new Latest<{ alpha: number }>();
+    const pending = latest.begin({ alpha: 10 });
+    latest.invalidate();
+    expect(pending.current).toBe(false);
+    expect(latest.settle(pending)).toBe(false);
+    const replacement = latest.begin({ alpha: 1 });
+    expect(latest.settle(replacement)).toBe(true);
+  });
   it('a stale ticket knows it is stale', () => {
     const l = new Latest<{ sbox: string }>();
     const first = l.begin({ sbox: 'weak' });

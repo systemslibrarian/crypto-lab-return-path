@@ -25,8 +25,6 @@ export interface SwitchCase {
   readonly beta: number;
   readonly gamma: number;
   readonly delta: number;
-  /** What the reader should take from this case. */
-  readonly story: string;
 }
 
 export const SWITCH_CASES: readonly SwitchCase[] = [
@@ -40,12 +38,10 @@ export const SWITCH_CASES: readonly SwitchCase[] = [
     beta: 0x08,
     gamma: 0x10,
     delta: 0x50,
-    story:
-      'The forward half leaves the low S-box active and the high one quiet; the backward half does the opposite. Through one substitution in one direction that is flatly impossible -- both DDT entries are zero. The round trip never touches a contradiction, so it costs nothing at all.',
   },
   {
     id: 'amplified',
-    label: 'All four S-boxes active: the trail is out by 1600x',
+    label: 'All four S-boxes active',
     short: 'Amplified',
     rounds: 3,
     switchRound: 1,
@@ -53,12 +49,10 @@ export const SWITCH_CASES: readonly SwitchCase[] = [
     beta: 0xbf,
     gamma: 0x51,
     delta: 0x05,
-    story:
-      'No quiet S-box anywhere: both nibbles of both differences are active. The one-way crossing succeeds 2 times in 16 on each nibble, so a trail charges (2/16) squared per nibble. The round trip succeeds 10 times in 16 on each. The switch sits at round 1, so the first half is empty and every bit of the discrepancy belongs to the switch.',
   },
   {
     id: 'control',
-    label: 'Control: nothing unusual at the switch',
+    label: 'Control: compare the two tables',
     short: 'Control',
     rounds: 3,
     switchRound: 2,
@@ -66,21 +60,17 @@ export const SWITCH_CASES: readonly SwitchCase[] = [
     beta: 0x02,
     gamma: 0x05,
     delta: 0xd0,
-    story:
-      'Here the round-trip table and the one-way table agree entry for entry. The trail estimate is still wrong, and by a factor you can predict: it pays the crossing twice, once going out and once coming back, when the round trip only has to succeed once.',
   },
   {
     id: 'incompatible',
-    label: 'Incompatible: the round trip never closes',
-    short: 'Incompatible',
+    label: 'Compatibility check',
+    short: 'Compatibility',
     rounds: 3,
     switchRound: 2,
     alpha: 0x0b,
     beta: 0x08,
     gamma: 0x51,
     delta: 0x20,
-    story:
-      'A round-trip entry of zero. Not unlikely -- impossible, for every one of the 256 middle states. Two trails chosen independently can simply refuse to join, which is the problem Murphy pointed out in 2011.',
   },
 ];
 
@@ -105,6 +95,20 @@ export interface CaseNumbers {
   readonly trailEstimate: number;
   /** p^2 q^2 with the switch paid once, from the round-trip table: the BCT estimate. */
   readonly bctEstimate: number;
+}
+
+/** The story follows both controls; the weak-box example is not universal. */
+export function caseStory(c: SwitchCase, sboxName: SboxName, switchRound = c.switchRound): string {
+  const n = caseNumbers(c, sboxName, switchRound);
+  const closed = n.bctHigh * n.bctLow;
+  const crossing = `For the selected S-box, the one-way entries are ${n.ddtHigh}/16 and ${n.ddtLow}/16; the round-trip entries are ${n.bctHigh}/16 and ${n.bctLow}/16.`;
+  const result = closed === 0
+    ? 'The round trip closes for none of the 256 middle states: this switch is incompatible.'
+    : n.switchTrail === 0
+      ? `The one-way crossing is impossible, while the round trip closes for ${closed} of 256 middle states.`
+      : `The round trip closes for ${closed} of 256 middle states, ${(n.switchBct / n.switchTrail).toFixed(1)} times the twice-paid one-way estimate.`;
+  const halves = `The switch is at round ${switchRound}: ${n.e0Layers} substitution layer${n.e0Layers === 1 ? '' : 's'} before it and ${n.e1Layers} after it. ${n.e0Layers === 0 ? 'The first half is empty. ' : ''}${n.e1Layers === 0 ? 'The second half is empty. ' : ''}${n.p === 0 || n.q === 0 ? 'One stated half has no trail at this split.' : 'The full quartet must also satisfy both outer halves.'}`;
+  return `${crossing} ${result} ${halves}`;
 }
 
 const tableCache = new Map<SboxName, ReturnType<typeof roundTables>>();

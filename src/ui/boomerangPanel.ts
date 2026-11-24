@@ -96,6 +96,11 @@ export function boomerangPanel(): BoomerangPanel {
   let currentSbox: SboxName = 'weak';
   let currentCase: SwitchCase = SWITCH_CASES[0];
 
+  keySelect.addEventListener('change', () => runner.retireIfChanged(
+    { keys: keySelect.value, caseId: currentCase.id, sbox: currentSbox },
+    'The key count changed. Press “Throw the boomerang” to measure the new sample.'
+  ));
+
   function quartetRecipe(c: SwitchCase): HTMLElement {
     return el('ol', { class: 'refs', role: 'list' }, [
       el('li', { role: 'listitem' }, [
@@ -151,6 +156,8 @@ export function boomerangPanel(): BoomerangPanel {
     const cipher = r.cipher;
     const nul = r.nullModel;
     const beatsNull = cipher.ci[0] > nul.ci[1];
+    const belowNull = cipher.ci[1] < nul.ci[0];
+    const separated = beatsNull || belowNull;
     const times = nul.rate > 0 ? cipher.rate / nul.rate : Infinity;
 
     out.append(
@@ -167,12 +174,12 @@ export function boomerangPanel(): BoomerangPanel {
       })
     );
 
-    if (beatsNull) {
+    if (separated) {
       out.append(
         verdict(
           'pass',
-          'IT CAME BACK',
-          `${num(cipher.returned)} of ${num(cipher.quartets)} quartets returned the difference they started with — ${times.toFixed(1)} times as often as the same procedure against ${num(nul.keysUsed)} real random permutations, intervals disjoint. A distinguisher: it tells this cipher from a random one using only the two oracles, never the key.`,
+          beatsNull ? 'IT CAME BACK' : 'DISTINGUISHED BY FEWER RETURNS',
+          `${num(cipher.returned)} of ${num(cipher.quartets)} quartets returned the difference they started with — ${times.toFixed(2)} times as often as the same procedure against ${num(nul.keysUsed)} real random permutations, intervals disjoint. ${belowNull ? 'The cipher returns less often; a detectable deficit also distinguishes it. ' : ''}A distinguisher: it tells this cipher from a random one using only the two oracles, never the key.`,
           'boom-verdict'
         )
       );
@@ -187,14 +194,18 @@ export function boomerangPanel(): BoomerangPanel {
       );
     }
 
-    const ratio = n.p2q2 > 0 ? n.p2q2 / cipher.rate : 0;
+    const above = n.p2q2 > cipher.ci[1];
+    const below = n.p2q2 < cipher.ci[0];
+    const ratio = cipher.rate > 0 ? n.p2q2 / cipher.rate : Infinity;
     out.append(
       verdict(
-        n.p2q2 > cipher.ci[1] ? 'fail' : 'info',
-        n.p2q2 > cipher.ci[1] ? 'AND p2q2 IS WRONG' : 'p2q2 IS WITHIN THE INTERVAL',
-        n.p2q2 > cipher.ci[1]
-          ? `p = ${n.p.toFixed(4)}, q = ${n.q.toFixed(4)}, so p2q2 = ${probLabel(n.p2q2)}. The cipher returns ${probLabel(cipher.rate)} — ${ratio.toFixed(1)} times less often. Act 5 takes the switch apart; the rest is the two backward pairs, which the estimate treats as independent and which are not.`
-          : `p = ${n.p.toFixed(4)}, q = ${n.q.toFixed(4)}, p2q2 = ${probLabel(n.p2q2)}, inside the measured interval.`,
+        above || below ? 'fail' : 'info',
+        above ? 'AND p2q2 IS WRONG' : below ? 'p2q2 IS BELOW THE INTERVAL' : 'p2q2 IS WITHIN THE INTERVAL',
+        above
+          ? `p = ${n.p.toFixed(4)}, q = ${n.q.toFixed(4)}, so p2q2 = ${probLabel(n.p2q2)}. The cipher returns ${probLabel(cipher.rate)}${Number.isFinite(ratio) ? ` — ${ratio.toFixed(1)} times less often` : ' — no returns were observed'}. Act 5 takes the switch apart; the rest is the two backward pairs, which the estimate treats as independent and which are not.`
+          : below
+            ? `p = ${n.p.toFixed(4)}, q = ${n.q.toFixed(4)}, so p2q2 = ${probLabel(n.p2q2)}, below the measured interval. ${n.p2q2 === 0 ? 'One stated half has no trail. That rules out this route, not the other middle paths that can return the same plaintext difference.' : 'The measured total includes other middle paths, and the estimate also assumes independent halves.'}`
+            : `p = ${n.p.toFixed(4)}, q = ${n.q.toFixed(4)}, p2q2 = ${probLabel(n.p2q2)}, inside the measured interval.`,
         'boom-p2q2'
       )
     );
@@ -211,8 +222,8 @@ export function boomerangPanel(): BoomerangPanel {
         stat(
           'versus chance',
           times === Infinity ? 'n/a' : `${times.toFixed(1)}×`,
-          beatsNull ? 'intervals do not overlap' : 'intervals overlap',
-          beatsNull ? 'good' : 'bad'
+          separated ? 'intervals do not overlap' : 'intervals overlap',
+          separated ? 'good' : 'bad'
         ),
         stat(
           'degenerate quartets excluded',
@@ -227,7 +238,7 @@ export function boomerangPanel(): BoomerangPanel {
       callout('caveat', 'What this rate can and cannot be attributed to', [
         el('p', {}, [
           document.createTextNode(
-            `A rate for one (alpha, delta) is the total over every middle path joining them, not the trail named above. Reading the real middle difference separates them — that needs the key, so it is an instrument, not an attack — and ${pctLabel(d.onTrailReturned / Math.max(1, d.returned))} of returns were on the stated trail.`
+            `A rate for one (alpha, delta) is the total over every middle path joining them. Reading the real forward middle difference needs the key, so it is an instrument, not an attack: ${pctLabel(d.onTrailReturned / Math.max(1, d.returned))} of returns reached the stated forward difference beta. This checks the forward half only; it does not check the two backward gamma conditions or certify the complete trail.`
           ),
         ]),
       ])

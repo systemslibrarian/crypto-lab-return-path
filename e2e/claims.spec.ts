@@ -1,5 +1,47 @@
 import { expect, test, type Page } from '@playwright/test';
 
+interface ReviewWorkerControl {
+  hold: string;
+  pending: { id: number; send: () => void }[];
+  replies: number;
+  failSieve: boolean;
+  release(index: number): void;
+}
+
+declare global {
+  interface Window { __returnPathReview: ReviewWorkerControl }
+}
+
+/** Hold real jobs, then deliver them in a chosen order; calculations stay real. */
+async function installWorkerControl(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const control: ReviewWorkerControl = {
+      hold: '', pending: [], replies: 0, failSieve: false,
+      release(index: number) { this.pending.splice(index, 1)[0].send(); },
+    };
+    window.__returnPathReview = control;
+    const NativeWorker = window.Worker;
+    window.Worker = new Proxy(NativeWorker, {
+      construct(Target, args) {
+        const worker = Reflect.construct(Target, args) as Worker;
+        const post = worker.postMessage.bind(worker);
+        worker.addEventListener('message', (event: MessageEvent) => {
+          control.replies++;
+          if (control.failSieve && event.data.result?.kind === 'sieve') {
+            event.data.result.trueSubkeySurvived = false;
+          }
+        });
+        worker.postMessage = ((message: unknown) => {
+          const m = message as { id: number; req: { kind: string } };
+          if (m.req.kind === control.hold) control.pending.push({ id: m.id, send: () => post(message) });
+          else post(message);
+        }) as typeof worker.postMessage;
+        return worker;
+      },
+    });
+  });
+}
+
 /**
  * The claims suite: does the page tell the truth?
  *
@@ -136,6 +178,7 @@ async function runId(page: Page, panel: string): Promise<string> {
 
 async function awaitRerender(page: Page, panel: string, before: string): Promise<void> {
   await expect(page.locator(panel)).not.toHaveAttribute('data-run', before);
+  await expect(page.locator(panel)).not.toHaveAttribute('aria-busy', 'true');
 }
 
 // ── The headline claim ─────────────────────────────────────────────────────
@@ -654,8 +697,8 @@ test('Act 5: the case table agrees with an independent BCT derivation for every 
     const gh = (gamma >> 4) & 0xf;
     const gl = gamma & 0xf;
     // RE-DERIVATION of all three printed columns.
-    expect(oneWay).toBe(`${ddt[bh][gh]}x${ddt[bl][gl]} /16`);
-    expect(roundTrip).toBe(`${bct[bh][gh]}x${bct[bl][gl]} /16`);
+    expect(oneWay).toBe(`${ddt[bh][gh]}/16 × ${ddt[bl][gl]}/16`);
+    expect(roundTrip).toBe(`${bct[bh][gh]}/16 × ${bct[bl][gl]}/16`);
     // 256 middle states x (bct_hi/16) x (bct_lo/16) = bct_hi x bct_lo.
     expect(measured).toBe(`${bct[bh][gh] * bct[bl][gl]}/256`);
   }
@@ -1190,4 +1233,181 @@ test('the run metadata says how long it took and which thread ran it', async ({ 
     await expect(page.locator(id)).toContainText(/\d+ ms/);
     await expect(page.locator(id)).toContainText(/worker thread|main thread/);
   }
+});
+
+test('AUDIT: a structurally allowed difference with zero sample hits is not called observed', async ({ page }) => {
+  await boot(page);
+  await page.locator('#imp-alpha').fill('0xac');
+  await page.locator('#imp-delta').fill('0x96');
+  await page.locator('#imp-rounds').selectOption('2');
+  const before = await runId(page, '#imp-out');
+  await page.locator('#imp-run').click();
+  await awaitRerender(page, '#imp-out', before);
+  await expect(page.locator('#imp-out .imp-verdict .verdict-label')).toHaveText('NOT RULED OUT — NOT OBSERVED');
+  await expect(page.locator('#imp-out .imp-verdict')).toContainText('zero times in 32,768 pairs');
+  await expect(page.locator('#imp-out .imp-verdict')).toContainText('not a proof of impossibility');
+  await expect(page.locator('#imp-out')).not.toContainText('AND IT HAPPENED');
+  await expect(page.locator('#imp-out-announce')).toContainText('Not ruled out, but not observed in this sample');
+});
+
+test('AUDIT: all manual measurement controls retire their completed results', async ({ page }) => {
+  await boot(page);
+  for (const [select, value, out] of [
+    ['#decay-keys', '2048', '#decay-out'],
+    ['#boom-keys', '3000', '#boom-out'],
+    ['#sieve-rounds', '3', '#sieve-out'],
+  ]) {
+    await page.locator(select).selectOption(value);
+    await expect(page.locator(`${out} .result-retired`)).toHaveCount(1);
+    await expect(page.locator(`${out} .stat`)).toHaveCount(0);
+    await expect(page.locator(`${out}-meta`)).toBeEmpty();
+  }
+});
+
+test('AUDIT: edits retire pending jobs in all four manual panels', async ({ page }) => {
+  await installWorkerControl(page);
+  await boot(page);
+  for (const [kind, button, input, value, out] of [
+    ['impossible', '#imp-run', '#imp-delta', '0x02', '#imp-out'],
+    ['decay', '#decay-run', '#decay-keys', '2048', '#decay-out'],
+    ['boomerang', '#boom-run', '#boom-keys', '3000', '#boom-out'],
+    ['sieve', '#sieve-run', '#sieve-key', '0x2345', '#sieve-out'],
+  ]) {
+    await page.evaluate((kind) => { window.__returnPathReview.hold = kind; }, kind);
+    await page.locator(button).click();
+    await expect.poll(() => page.evaluate(() => window.__returnPathReview.pending.length)).toBe(1);
+    if (input.endsWith('-keys')) await page.locator(input).selectOption(value);
+    else await page.locator(input).fill(value);
+    await expect(page.locator(`${out} .verdict-label`)).toHaveText('VERDICT RETIRED');
+    await expect(page.locator(button)).not.toHaveAttribute('aria-disabled', 'true');
+    const replies = await page.evaluate(() => {
+      const c = window.__returnPathReview;
+      const before = c.replies;
+      c.release(0);
+      return before;
+    });
+    await expect.poll(() => page.evaluate(() => window.__returnPathReview.replies)).toBeGreaterThan(replies);
+    await expect(page.locator(`${out} .verdict-label`)).toHaveText('VERDICT RETIRED');
+    await expect(page.locator(out)).not.toHaveAttribute('aria-busy', 'true');
+  }
+});
+
+test('AUDIT: a replacement run can finish before a retired run without being overwritten', async ({ page }) => {
+  await installWorkerControl(page);
+  await boot(page);
+  await page.evaluate(() => { window.__returnPathReview.hold = 'impossible'; });
+  await page.locator('#imp-run').click();
+  await expect.poll(() => page.evaluate(() => window.__returnPathReview.pending.length)).toBe(1);
+  await page.locator('#imp-delta').fill('0x11');
+  await page.locator('#imp-run').click();
+  await expect.poll(() => page.evaluate(() => window.__returnPathReview.pending.length)).toBe(2);
+  await page.evaluate(() => window.__returnPathReview.release(1));
+  await expect(page.locator('#imp-out .imp-verdict')).toContainText('POSSIBLE — AND IT HAPPENED');
+  await expect(page.locator('#imp-run')).not.toHaveAttribute('aria-disabled', 'true');
+  const current = await page.locator('#imp-out').textContent();
+  const replies = await page.evaluate(() => {
+    const before = window.__returnPathReview.replies;
+    window.__returnPathReview.release(0);
+    return before;
+  });
+  await expect.poll(() => page.evaluate(() => window.__returnPathReview.replies)).toBeGreaterThan(replies);
+  expect(await page.locator('#imp-out').textContent()).toBe(current);
+});
+
+test('AUDIT: an invalid sieve input cannot be replaced by an older successful answer', async ({ page }) => {
+  await installWorkerControl(page);
+  await boot(page);
+  await page.evaluate(() => { window.__returnPathReview.hold = 'sieve'; });
+  await page.locator('#sieve-run').click();
+  await expect.poll(() => page.evaluate(() => window.__returnPathReview.pending.length)).toBe(1);
+  await page.locator('#sieve-key').fill('zz');
+  await page.locator('#sieve-key').press('Enter');
+  await expect(page.locator('#sieve-out .sieve-failure')).toContainText('E_RANGE');
+  const replies = await page.evaluate(() => {
+    const before = window.__returnPathReview.replies;
+    window.__returnPathReview.release(0);
+    return before;
+  });
+  await expect.poll(() => page.evaluate(() => window.__returnPathReview.replies)).toBeGreaterThan(replies);
+  await expect(page.locator('#sieve-out .sieve-failure')).toContainText('E_RANGE');
+  await expect(page.locator('#sieve-out .verdict-pass')).toHaveCount(0);
+});
+
+test('AUDIT: an invariant breach withdraws every sieve success claim and announcement', async ({ page }) => {
+  await installWorkerControl(page);
+  await boot(page);
+  await page.evaluate(() => { window.__returnPathReview.failSieve = true; });
+  const before = await runId(page, '#sieve-out');
+  await page.locator('#sieve-run').click();
+  await awaitRerender(page, '#sieve-out', before);
+  await expect(page.locator('#sieve-out .sieve-breach')).toContainText('E_TRUE_KEY_ELIMINATED');
+  await expect(page.locator('#sieve-out .verdict-pass')).toHaveCount(0);
+  await expect(page.locator('#sieve-out-announce')).toContainText('The true subkey was eliminated');
+  await expect(page.locator('#sieve-out-announce')).not.toContainText('survived');
+});
+
+test('AUDIT: zero p2q2 is below a positive interval in every stronger-box case', async ({ page }) => {
+  await boot(page);
+  await page.locator('#global-sbox').selectOption('strong');
+  for (const id of ['ladder', 'amplified', 'control', 'incompatible']) {
+    const before = await runId(page, '#boom-out');
+    await page.locator(`.seg-btn[data-case="${id}"]`).click();
+    await awaitRerender(page, '#boom-out', before);
+    await expect(page.locator('#boom-out .boom-p2q2 .verdict-label')).toHaveText('p2q2 IS BELOW THE INTERVAL');
+    await expect(page.locator('#boom-out .boom-p2q2')).toContainText('One stated half has no trail');
+    const bounds = await page.locator('#boom-out .stat').filter({ hasText: '95% interval' }).locator('.stat-val').textContent();
+    expect(Number(bounds!.split(' .. ')[0])).toBeGreaterThan(0);
+  }
+  await page.locator('.seg-btn[data-case="control"]').click();
+  await expect(page.locator('#boom-out')).not.toHaveAttribute('aria-busy', 'true');
+  await page.locator('#boom-keys').selectOption('3000');
+  await page.locator('#boom-run').click();
+  await expect(page.locator('#boom-out .boom-verdict .verdict-label')).toHaveText('DISTINGUISHED BY FEWER RETURNS');
+  await expect(page.locator('#boom-out .boom-verdict')).toContainText('a detectable deficit also distinguishes it');
+  await expect(page.locator('#boom-out .stat').filter({ hasText: 'versus chance' })).toContainText('intervals do not overlap');
+});
+
+test('AUDIT: switch explanations use the selected S-box and split', async ({ page }) => {
+  await boot(page);
+  for (const box of ['weak', 'strong']) {
+    await page.locator('#global-sbox').selectOption(box);
+    for (const id of ['ladder', 'amplified', 'control', 'incompatible']) {
+      const before = await runId(page, '#switch-out');
+      await page.locator(`.seg-btn[data-case="${id}"]`).click();
+      await awaitRerender(page, '#switch-out', before);
+      const tableRow = page.locator('#switch-out table').first().locator('tbody tr').nth(['ladder','amplified','control','incompatible'].indexOf(id));
+      const counts = (await tableRow.locator('td').nth(3).textContent())!.match(/\d+/g)!.map(Number);
+      const closed = counts[0] * counts[2];
+      await expect(page.locator('#switch-story')).toContainText(closed ? `closes for ${closed} of 256` : 'closes for none of the 256');
+      if (closed > 0) await expect(page.locator('#switch-story')).not.toContainText('this switch is incompatible');
+    }
+  }
+  const before = await runId(page, '#switch-out');
+  await page.locator('#switch-round').selectOption('3');
+  await awaitRerender(page, '#switch-out', before);
+  await expect(page.locator('#switch-story')).toContainText('round 3: 2 substitution layers before it and 0 after it');
+  await expect(page.locator('#switch-story')).toContainText('The second half is empty');
+  await expect(page.locator('#switch-story')).not.toContainText('The first half is empty');
+  await expect(page.locator('#switch-out')).toContainText('p2q2 ignores it');
+  await expect(page.locator('#honesty')).toContainText('a zero entry rules out the stated quartet trail');
+});
+
+test('AUDIT: the amplified walk displays its real keyed states without claiming impossibility', async ({ page }) => {
+  await boot(page);
+  const before = await runId(page, '#switch-out');
+  await page.locator('.seg-btn[data-case="amplified"]').click();
+  await awaitRerender(page, '#switch-out', before);
+  await expect(page.locator('#walk-key')).toContainText('Key 0x0005, found after trying 6');
+  for (let i = 2; i <= 8; i++) await page.locator('#walk-step').click();
+  await expect(page.locator('#walk-key')).toContainText('Key 0x0005');
+  await expect(page.locator('#walk-out [data-step="2"]')).toContainText('S-box input states 0x10 , 0xaf');
+  await expect(page.locator('#walk-out [data-step="3"]')).toContainText('0x4e , 0x67');
+  await expect(page.locator('#walk-out [data-step="6"]')).toContainText('0x1f , 0x36');
+  await expect(page.locator('#walk-out [data-step="7"]')).toContainText('0x35 , 0x8a');
+  await expect(page.locator('#walk-out .walk-verdict .verdict-label')).toHaveText('THE COMPLETE QUARTET RETURNED');
+  await expect(page.locator('#walk-out')).not.toContainText('IMPOSSIBLE ONE WAY');
+  await page.locator('#sieve-rounds').selectOption('3');
+  await page.locator('#sieve-run').click();
+  await expect(page.locator('#sieve-out')).toContainText('C = S(X XOR K3) XOR K4');
+  await expect(page.locator('#sieve-out')).toContainText('rotating the 16-bit master key left by 12 bits');
 });

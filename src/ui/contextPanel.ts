@@ -48,7 +48,7 @@ export function contextPanel(): HTMLElement {
       el('li', { role: 'listitem' }, [
         el('strong', { text: 'COCONUT98, and the boomerang. ' }),
         document.createTextNode(
-          'Wagner introduced the boomerang in 1999 against COCONUT98, a cipher designed to be provably secure against conventional differential cryptanalysis. It was: no single differential got through. Two halves did.'
+          'Wagner introduced the boomerang in 1999 against COCONUT98, a cipher designed to be provably secure against conventional differential cryptanalysis. Its conventional differential bound did not cover the adaptive quartet attack.'
         ),
       ]),
       el('li', { role: 'listitem' }, [
@@ -117,7 +117,7 @@ export function honestyPanel(): HTMLElement {
     el('li', { role: 'listitem' }, [
       el('strong', { text: 'Everything measured is measured. ' }),
       document.createTextNode(
-        'Every rate here comes from real encryptions in this tab, with its sample size and interval beside it. Nothing is simulated or replayed.'
+        'Measured rates come from real encryptions in this tab. Sampled-key results report intervals; a census reports an exact rate. Table-based predictions are shown separately.'
       ),
     ]),
     el('li', { role: 'listitem' }, [
@@ -139,11 +139,11 @@ export function honestyPanel(): HTMLElement {
     ],
     [
       'The sieve recovers 8 of 16 key bits',
-      'A unique surviving candidate is the final mixing key, which this key schedule makes the low byte of the master key. The other byte is untouched. A recovered subkey is not a recovered key.',
+      'A unique surviving candidate is the final mixing key: the master key’s low byte for four rounds, or the low byte after a 12-bit left rotation for three rounds. Eight master-key bits remain unknown. A recovered subkey is not a recovered key.',
     ],
     [
-      'A one-layer switch can only help the boomerang',
-      'The round-trip table is never below the one-way table, proven entry by entry in the suite. So the switch cannot be what makes a boomerang RARER than p2q2 predicts. Murphy\u2019s incompatibility in that form needs a middle section wider than one substitution layer, which this page does not model and does not claim to.',
+      'A round trip is no harder than paying the same one-way crossing twice',
+      'The round-trip table is never below the matching one-way table, checked entry by entry in the suite. This compares the same switch conditions. It does not make the switch free: p2q2 ignores the switch, so a round-trip rate below one can lower that estimate, and a zero entry rules out the stated quartet trail.',
     ],
     [
       'The boomerang needs an adaptive decryption oracle',
@@ -151,11 +151,11 @@ export function honestyPanel(): HTMLElement {
     ],
     [
       'An end-to-end rate cannot be attributed to one trail',
-      'Hundreds of middle paths share any pair of end differences, so a measured return rate is their total. Act 4 separates them by reading the real middle difference \u2014 which needs the key, so it is labelled an instrument \u2014 and Act 5 avoids the problem by measuring the switch with nothing attached.',
+      'Hundreds of middle paths share any pair of end differences, so a measured return rate is their total. Act 4 measures the share reaching the stated forward middle difference. That needs the key and does not check both backward conditions. Act 5 checks a complete quartet and separately measures the isolated switch.',
     ],
     [
       'Intervals resample keys, not quartets',
-      'The 128 quartets one key contributes share its subkeys, so they are not 128 independent trials. Every interval here is a cluster bootstrap over keys; the narrower pooled Wilson interval is shown beside it in Act 4 so the cost of the independence assumption is visible.',
+      'The 128 quartets one key contributes share its subkeys, so they are not 128 independent trials. Sampling intervals use a cluster bootstrap over keys; a census reports an exact rate. The pooled Wilson interval is also shown in Act 4 to expose the independence assumption.',
     ],
     [
       'No key material is stored, and what the share link carries',
